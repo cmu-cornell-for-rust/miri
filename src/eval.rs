@@ -23,6 +23,10 @@ use crate::diagnostics::report_leaks;
 use crate::shims::{global_ctor, tls};
 use crate::*;
 
+// use pprof::Frames;
+use std::io::Write;
+use std::fs::OpenOptions;
+
 #[derive(Copy, Clone, Debug)]
 pub enum MiriEntryFnType {
     MiriStart,
@@ -451,6 +455,15 @@ fn call_main<'tcx>(
     interp_ok(())
 }
 
+/*
+fn top_20_frames() -> impl Fn(&mut Frames) {
+    move |frames: &mut Frames| {
+        if frames.frames.len() > 20 {
+            frames.frames.truncate(20);
+        }
+    }
+} */
+
 /// Evaluates the entry function specified by `entry_id`.
 /// Returns `Some(return_code)` if program execution completed.
 /// Returns `None` if an evaluation error occurred.
@@ -462,6 +475,9 @@ pub fn eval_entry<'tcx>(
     genmc_ctx: Option<Rc<GenmcCtx>>,
 ) -> Result<(), NonZeroI32> {
     // Copy setting before we move `config`.
+    let guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(200)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
     let ignore_leaks = config.ignore_leaks;
 
     let mut ecx = match create_ecx(tcx, entry_id, entry_type, config, genmc_ctx).report_err() {
@@ -512,7 +528,17 @@ pub fn eval_entry<'tcx>(
                 break 'miri_error;
             }
         }
-
+        // if let Ok(report) = guard.report().frames_post_processor(top_20_frames()).build() {
+        if let Ok(report) = guard.report().build() {
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("profile.log")
+            {
+                let _ = writeln!(file, "==== Miri Profiling Results ====");
+                let _ = writeln!(file, "{:?}", report);
+            }
+        }
         // The interpreter has not reported an error.
         // (There could still be errors in the session if there are other interpreters.)
         return match NonZeroI32::new(return_code) {
