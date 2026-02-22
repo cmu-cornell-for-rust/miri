@@ -49,7 +49,7 @@ impl<'tcx> Tree {
         range: AllocRange,
         machine: &MiriMachine<'tcx>,
     ) -> InterpResult<'tcx> {
-        info!(
+        trace!(
             "{} with tag {:?}: {:?}, size {}",
             access_kind,
             prov,
@@ -219,7 +219,7 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             interp_ok(())
         };
 
-        info!("Reborrow of size {:?}", ptr_size);
+        trace!("Reborrow of size {:?}", ptr_size);
         // Unlike SB, we *do* a proper retag for size 0 if can identify the allocation.
         // After all, the pointer may be lazily initialized outside this initial range.
         let Ok((alloc_id, base_offset, parent_prov)) = this.ptr_try_get_alloc_id(place.ptr(), 0)
@@ -228,7 +228,7 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             // This pointer doesn't come with an AllocId, so there's no
             // memory to do retagging in.
             let new_prov = place.ptr().provenance;
-            info!("reborrow of size 0: reusing {:?} (pointee {})", place.ptr(), place.layout.ty,);
+            trace!("reborrow of size 0: reusing {:?} (pointee {})", place.ptr(), place.layout.ty,);
             log_creation(this, None)?;
             // Keep original provenance.
             return interp_ok(new_prov);
@@ -237,7 +237,7 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         log_creation(this, Some((alloc_id, base_offset, parent_prov)))?;
 
-        info!(
+        trace!(
             "reborrow: reference {:?} derived from {:?} (pointee {}): {:?}, size {}",
             new_tag,
             parent_prov,
@@ -388,7 +388,7 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         //   to do a zero-length reborrow.
         let reborrow_size =
             this.size_and_align_of_val(place)?.map(|(size, _)| size).unwrap_or(place.layout.size);
-        info!("Creating new permission: {:?} with size {:?}", new_perm, reborrow_size);
+        trace!("Creating new permission: {:?} with size {:?}", new_perm, reborrow_size);
 
         // This new tag is not guaranteed to actually be used.
         //
@@ -569,7 +569,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 // if converting this alloc_id from a global to a local one
                 // uncovers a non-supported `extern static`.
                 let alloc_extra = this.get_alloc_extra(alloc_id)?;
-                info!("Tree Borrows tag {tag:?} exposed in {alloc_id:?}");
+                trace!("Tree Borrows tag {tag:?} exposed in {alloc_id:?}");
 
                 let global = this.machine.borrow_tracker.as_ref().unwrap();
                 let protected_tags = &global.borrow().protected_tags;

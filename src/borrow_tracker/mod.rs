@@ -196,7 +196,7 @@ impl GlobalStateInner {
                     None,
                 ));
             }
-            info!("New allocation {:?} has rpot tag {:?}", id, tag);
+            trace!("New allocation {:?} has rpot tag {:?}", id, tag);
             self.root_ptr_tags.try_insert(id, tag).unwrap();
             tag
         })

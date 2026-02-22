@@ -836,6 +836,7 @@ impl Tree {
         // Since we do a post-traversal (by deleting nodes only after handling all children),
         // we also need to be a bit smarter than "pop node, push all children."
         let mut stack = vec![(root, 0)];
+        let mut removed_count = 0;
         while let Some((tag, nth_child)) = stack.last_mut() {
             let node = self.nodes.get(*tag).unwrap();
             if *nth_child < node.children.len() {
@@ -858,6 +859,7 @@ impl Tree {
                     if self.is_useless(*idx, live) {
                         // Delete `idx` node everywhere else.
                         self.remove_useless_node(*idx);
+                        removed_count += 1;
                         // And delete it from children_of_node.
                         false
                     } else {
@@ -865,6 +867,7 @@ impl Tree {
                             // `nextchild` is our grandchild, and will become our direct child.
                             // Delete the in-between node, `idx`.
                             self.remove_useless_node(*idx);
+                            removed_count += 1;
                             // Set the new child's parent.
                             self.nodes.get_mut(nextchild).unwrap().parent = Some(*tag);
                             // Save the new child in children_of_node.
@@ -882,6 +885,12 @@ impl Tree {
                 continue;
             }
         }
+        let root_tag = self.nodes.get(root).unwrap().tag;
+        trace!(
+            "Removed {} useless children from root tag {:?}",
+            removed_count,
+            root_tag
+        );
     }
 }
 
@@ -1066,7 +1075,7 @@ impl<'tcx> LocationTree {
                 visitor.traverse_nonchildren(access_source, node_skipper, node_app),
         };
         let source_tag = nodes.get(access_source).unwrap().tag;
-        info!(
+        trace!(
             "Normal access from source tag {:?}: visited {} nodes, skipped {} nodes",
             source_tag,
             visited_nodes.get(),
@@ -1200,7 +1209,7 @@ impl<'tcx> LocationTree {
             },
         )?;
         let root_tag = nodes.get(root).unwrap().tag;
-        info!(
+        trace!(
             "Wildcard access from root tag {:?}: visited {} nodes, skipped {} nodes",
             root_tag,
             visited_nodes.get(),
