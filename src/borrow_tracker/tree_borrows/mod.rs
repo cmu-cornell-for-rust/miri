@@ -510,6 +510,8 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 }
             }
         }
+
+        let was_init = matches!(*tree_borrows, AllocState::Initialized(..));
         // Record the parent-child pair in the tree.
         tree_borrows.new_child(
             base_offset,
@@ -523,7 +525,12 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             global,
         )?;
         drop(tree_borrows);
-        this.machine.retags_since_gc = this.machine.retags_since_gc.saturating_add(1);
+
+        // Get an accurate node count (1 if already initialized, 2 if we just initialized)
+        this.machine.nodes_since_gc = this
+            .machine
+            .nodes_since_gc
+            .saturating_add(if was_init { 1 } else { 2 });
 
         interp_ok(Some(new_prov))
     }

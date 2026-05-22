@@ -608,8 +608,10 @@ pub struct MiriMachine<'tcx> {
     /// The number of blocks that passed since the last BorTag GC pass.
     pub(crate) since_gc: u32,
 
-    /// Number of successful Tree Borrows retags (`new_child` calls) since the last GC pass.
-    pub(crate) retags_since_gc: u32,
+    /// Run a garbage collector for TreeBorrows every N created nodes.
+    pub(crate) node_gc_interval: u32,
+    /// Number of nodes created since the last GC pass.
+    pub(crate) nodes_since_gc: u32,
 
     /// The number of CPUs to be reported by miri.
     pub(crate) num_cpus: u32,
@@ -804,7 +806,8 @@ impl<'tcx> MiriMachine<'tcx> {
             }).collect(),
             gc_interval: config.gc_interval,
             since_gc: 0,
-            retags_since_gc: 0,
+            node_gc_interval: config.node_gc_interval,
+            nodes_since_gc: 0,
             num_cpus: config.num_cpus,
             page_size,
             stack_addr,
@@ -1039,7 +1042,8 @@ impl VisitProvenance for MiriMachine<'_> {
             native_lib_ecx_interchange: _,
             gc_interval: _,
             since_gc: _,
-            retags_since_gc: _,
+            node_gc_interval: _,
+            nodes_since_gc: _,
             num_cpus: _,
             page_size: _,
             stack_addr: _,
@@ -1761,11 +1765,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         // stacks.
         // When debug assertions are enabled, run the GC as often as possible so that any cases
         // where it mistakenly removes an important tag become visible.
-        const RETAG_THRESH: u32 = 200_000;
         let gc_cond = if let Some(borrow_tracker) = &ecx.machine.borrow_tracker {
             match borrow_tracker.borrow().borrow_tracker_method() {
                 crate::borrow_tracker::BorrowTrackerMethod::TreeBorrows(_) => {
-                    RETAG_THRESH > 0 && ecx.machine.retags_since_gc >= RETAG_THRESH
+                    ecx.machine.node_gc_interval > 0 && ecx.machine.nodes_since_gc >= ecx.machine.node_gc_interval
                 },
                 crate::borrow_tracker::BorrowTrackerMethod::StackedBorrows => {
                     ecx.machine.gc_interval > 0 && ecx.machine.since_gc >= ecx.machine.gc_interval
@@ -1777,7 +1780,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
 
         if gc_cond {
             ecx.machine.since_gc = 0;
-            ecx.machine.retags_since_gc = 0;
+            ecx.machine.nodes_since_gc = 0;
             ecx.run_provenance_gc();
         }
 
