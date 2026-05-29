@@ -89,6 +89,7 @@ impl AllocState {
                     global,
                     alloc_id,
                     span,
+                    machine,
                 )
             }
             AllocState::Uninitialized { .. } => {
@@ -110,7 +111,7 @@ impl AllocState {
         match self {
             AllocState::Initialized(tree) => {
                 let span = machine.current_user_relevant_span();
-                tree.dealloc(prov, alloc_range(Size::ZERO, size), global, alloc_id, span)
+                tree.dealloc(prov, alloc_range(Size::ZERO, size), global, alloc_id, span, machine)
             }
             AllocState::Uninitialized { .. } => {
                 interp_ok(())
@@ -130,7 +131,7 @@ impl AllocState {
         match self {
             AllocState::Initialized(tree) => {
                 let span = machine.current_user_relevant_span();
-                tree.perform_protector_end_access(tag, global, alloc_id, span)?;
+                tree.perform_protector_end_access(tag, global, alloc_id, span, machine)?;
                 tree.update_exposure_for_protector_release(tag);
                 interp_ok(())
             }
@@ -157,11 +158,11 @@ impl AllocState {
         global: &GlobalState,
         alloc_id: AllocId,
         span: Span,
-        _machine: &MiriMachine<'tcx>,
+        machine: &MiriMachine<'tcx>,
     ) -> InterpResult<'tcx> {
         match self {
             AllocState::Initialized(tree) => {
-                tree.perform_access(prov, range, access_kind, cause, global, alloc_id, span)
+                tree.perform_access(prov, range, access_kind, cause, global, alloc_id, span, machine)
             }
             AllocState::Uninitialized { .. } => {
                 interp_ok(())
@@ -511,7 +512,6 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         }
 
-        let was_init = matches!(*tree_borrows, AllocState::Initialized(..));
         // Record the parent-child pair in the tree.
         tree_borrows.new_child(
             base_offset,
@@ -525,12 +525,6 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             global,
         )?;
         drop(tree_borrows);
-
-        // Get an accurate node count (1 if already initialized, 2 if we just initialized)
-        this.machine.nodes_since_gc = this
-            .machine
-            .nodes_since_gc
-            .saturating_add(if was_init { 1 } else { 2 });
 
         interp_ok(Some(new_prov))
     }
