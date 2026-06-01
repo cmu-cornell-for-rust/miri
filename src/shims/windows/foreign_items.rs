@@ -235,6 +235,17 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 let result = this.GetCurrentProcessId()?;
                 this.write_scalar(result, dest)?;
             }
+            "GetTempPathW" => {
+                // FIXME: This does not have a direct test (#3179).
+                let [bufferlength, buffer] = this.check_shim_sig(
+                    shim_sig!(extern "system" fn(u32, *mut _) -> u32),
+                    link_name,
+                    abi,
+                    args,
+                )?;
+                let result = this.GetTempPathW(bufferlength, buffer)?;
+                this.write_scalar(result, dest)?;
+            }
 
             // File related shims
             "NtWriteFile" => {
@@ -449,6 +460,16 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 )?;
                 let res =
                     this.SetFilePointerEx(file, distance_to_move, new_file_pointer, move_method)?;
+                this.write_scalar(res, dest)?;
+            }
+            "MoveFileExW" => {
+                let [existing_name, new_name, flags] = this.check_shim_sig(
+                    shim_sig!(extern "system" fn(*const _, *const _, u32) -> winapi::BOOL),
+                    link_name,
+                    abi,
+                    args,
+                )?;
+                let res = this.MoveFileExW(existing_name, new_name, flags)?;
                 this.write_scalar(res, dest)?;
             }
 
@@ -943,8 +964,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     Handle::Pseudo(PseudoHandle::CurrentThread) => this.active_thread(),
                     _ => this.invalid_handle("GetThreadDescription")?,
                 };
-                let tid = this.get_tid(thread);
-                this.write_scalar(Scalar::from_u32(tid), dest)?;
+                this.write_scalar(Scalar::from_u32(thread.to_u32()), dest)?;
             }
             "GetCurrentThreadId" => {
                 let [] = this.check_shim_sig(
@@ -953,9 +973,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     abi,
                     args,
                 )?;
-                let thread = this.active_thread();
-                let tid = this.get_tid(thread);
-                this.write_scalar(Scalar::from_u32(tid), dest)?;
+                this.write_scalar(Scalar::from_u32(this.active_thread().to_u32()), dest)?;
             }
 
             // Miscellaneous
@@ -1199,7 +1217,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                         "`_Unwind_RaiseException` is not supported on non-MinGW Windows",
                     );
                 }
-                // This function looks and behaves excatly like miri_start_unwind.
+                // This function looks and behaves exactly like miri_start_unwind.
                 let [payload] = this.check_shim_sig(
                     shim_sig!(extern "C" fn(*mut _) -> unwind::libunwind::_Unwind_Reason_Code),
                     link_name,
