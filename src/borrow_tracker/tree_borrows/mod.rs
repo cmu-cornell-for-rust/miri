@@ -26,27 +26,33 @@ mod exhaustive;
 use self::perms::Permission;
 pub use self::tree::Tree;
 
-/// Per-allocation state for Tree Borrows, supporting lazy initialization.
+/// Per-allocation state for Tree Borrows, supporting lazy allocation
+/// and wildcard exposure.
 #[derive(Debug, Clone)]
 pub enum AllocState {
-    Uninitialized {
+    Uninit {
         id: AllocId,
         size: Size,
         span: Span,
+        exposed: bool,
     },
-    Initialized(Tree),
+    Init(Tree),
 }
 
 impl AllocState {
     /// Ensure the tree is initialized, creating it if necessary.
-    pub fn ensure_initialized<'tcx>(
+    pub fn ensure_init<'tcx>(
         &mut self,
         state: &mut GlobalStateInner,
         machine: &MiriMachine<'tcx>,
     ) {
-        if let AllocState::Uninitialized { id, size, span } = self {
+        if let AllocState::Uninit { id, size, span, exposed } = self {
             let tag = state.root_ptr_tag(*id, machine);
-            *self = AllocState::Initialized(Tree::new(tag, *size, *span));
+            let mut tree = Tree::new(tag, *size, *span);
+            if *exposed {
+                tree.expose_tag(tag, false);
+            }
+            *self = AllocState::Init(tree);
         }
     }
 
@@ -59,7 +65,7 @@ impl AllocState {
         machine: &MiriMachine<'_>,
     ) -> Self {
         let span = machine.current_user_relevant_span();
-        AllocState::Uninitialized { id, size, span }
+        AllocState::Uninit { id, size, span, exposed: false }
     }
 
     pub fn before_memory_access<'tcx>(
@@ -73,7 +79,7 @@ impl AllocState {
         let global = machine.borrow_tracker.as_ref().unwrap();
         
         match self {
-            AllocState::Initialized(tree) => {
+            AllocState::Init(tree) => {
                 trace!(
                     "{} with tag {:?}: {:?}, size {}",
                     access_kind,
@@ -92,7 +98,7 @@ impl AllocState {
                     span,
                 )
             }
-            AllocState::Uninitialized { .. } => {
+            AllocState::Uninit { .. } => {
                 interp_ok(())
             }
         }
@@ -109,11 +115,11 @@ impl AllocState {
         let global = machine.borrow_tracker.as_ref().unwrap();
         
         match self {
-            AllocState::Initialized(tree) => {
+            AllocState::Init(tree) => {
                 let span = machine.current_user_relevant_span();
                 tree.dealloc(prov, alloc_range(Size::ZERO, size), global, alloc_id, span)
             }
-            AllocState::Uninitialized { .. } => {
+            AllocState::Uninit { .. } => {
                 interp_ok(())
             }
         }
@@ -129,13 +135,13 @@ impl AllocState {
     ) -> InterpResult<'tcx> {
         
         match self {
-            AllocState::Initialized(tree) => {
+            AllocState::Init(tree) => {
                 let span = machine.current_user_relevant_span();
                 tree.perform_protector_end_access(tag, global, alloc_id, span)?;
                 tree.update_exposure_for_protector_release(tag);
                 interp_ok(())
             }
-            AllocState::Uninitialized { .. } => {
+            AllocState::Uninit { .. } => {
                 interp_ok(())
             }
         }
@@ -143,7 +149,7 @@ impl AllocState {
 
     /// Wrapper for Tree::remove_unreachable_tags
     pub fn remove_unreachable_tags(&mut self, tags: &FxHashSet<BorTag>) {
-        if let AllocState::Initialized(tree) = self { 
+        if let AllocState::Init(tree) = self { 
             tree.remove_unreachable_tags(tags);
         }
     }
@@ -161,10 +167,10 @@ impl AllocState {
         _machine: &MiriMachine<'tcx>,
     ) -> InterpResult<'tcx> {
         match self {
-            AllocState::Initialized(tree) => {
+            AllocState::Init(tree) => {
                 tree.perform_access(prov, range, access_kind, cause, global, alloc_id, span)
             }
-            AllocState::Uninitialized { .. } => {
+            AllocState::Uninit { .. } => {
                 interp_ok(())
             }
         }
@@ -183,13 +189,13 @@ impl AllocState {
         machine: &MiriMachine<'tcx>,
         global: &GlobalState,
     ) -> InterpResult<'tcx> {
-        self.ensure_initialized(&mut global.borrow_mut(), machine);
+        self.ensure_init(&mut global.borrow_mut(), machine);
         match self {
-            AllocState::Initialized(tree) => {
+            AllocState::Init(tree) => {
                 tree.new_child(base_offset, parent_prov, new_tag, inside_perms, outside_perm, protected, span)
             }
-            AllocState::Uninitialized { .. } => {
-                panic!("tree should have been initialized")
+            AllocState::Uninit { .. } => {
+                unreachable!()
             }
         }
     }
@@ -202,8 +208,11 @@ impl AllocState {
         _machine: &MiriMachine<'tcx>,
         _global: &GlobalState,
     ) {
-        if let AllocState::Initialized(tree) = self {
-            tree.expose_tag(tag, protected);
+        match self {
+            AllocState::Init(tree) => tree.expose_tag(tag, protected),
+            // The only tag that can be exposed before the tree exists is the root tag.
+            // Record the exposure here and apply it in `ensure_initialized`.
+            AllocState::Uninit { exposed, .. } => *exposed = true,
         }
     }
 
@@ -216,10 +225,10 @@ impl AllocState {
         _global: &GlobalState,
     ) -> InterpResult<'tcx> {
         match self {
-            AllocState::Initialized(tree) => {
+            AllocState::Init(tree) => {
                 tree.print_tree(protected_tags, show_unnamed)
             }
-            AllocState::Uninitialized { .. } => {
+            AllocState::Uninit { .. } => {
                 interp_ok(())
             }
         }
@@ -235,10 +244,10 @@ impl AllocState {
         _global: &GlobalState,
     ) -> InterpResult<'tcx> {
         match self {
-            AllocState::Initialized(tree) => {
+            AllocState::Init(tree) => {
                 tree.give_pointer_debug_name(tag, nth_parent, name)
             }
-            AllocState::Uninitialized { .. } => {
+            AllocState::Uninit { .. } => {
                 interp_ok(())
             }
         }
@@ -248,7 +257,7 @@ impl AllocState {
 /// Wrapper for Tree::visit_provenance
 impl VisitProvenance for AllocState {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
-        if let AllocState::Initialized(tree) = self {
+        if let AllocState::Init(tree) = self {
             tree.visit_provenance(visit);
         }
     }
