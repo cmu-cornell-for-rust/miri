@@ -9,8 +9,8 @@ fn main() {
     // `&raw mut x` is a raw-pointer retag and x's tree stays `Uninit`.
     let p: *mut u32 = &raw mut x;
 
-    // Integer cast exposes the root tag via `tb_expose_tag`, but it is still `Uninit`.
-    // AllocState::expose_tag` now writes `exposed` to true (used to be no-op).
+    // Integer cast exposes the root tag via, but it is still `Uninit`.
+    // `expose_tag` now writes `exposed` to true (used to be no-op).
     let addr = p as usize;
 
     // Creating `&mut x` triggers a retag so the tree is now `Init`!
@@ -18,7 +18,7 @@ fn main() {
 
     // `addr` was derived from an exposed pointer, so this wildcard read is valid.
     // The root tag should be in the `ExposedCache` with write-level access.
-    // Previously, Miri reported UB here:
+    // Previously, lazy alloc falsely reported UB here:
     let y = addr as *mut u32;
     let _ = unsafe { *y };
 }
