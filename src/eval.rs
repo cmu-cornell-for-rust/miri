@@ -17,6 +17,8 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::config::EntryFnType;
 use rustc_target::spec::Os;
 
+use crate::borrow_tracker::AllocState;
+use crate::borrow_tracker::tree_borrows::fsm::flush_global_stats;
 use crate::concurrency::GenmcCtx;
 use crate::concurrency::thread::TlsAllocAction;
 use crate::diagnostics::report_leaks;
@@ -496,6 +498,16 @@ pub fn eval_entry<'tcx>(
         ecx.handle_ice();
         panic::resume_unwind(panic_payload)
     });
+    // Flush tree borrows FSM traces before reporting results.
+    ecx.memory.alloc_map().iter(|iter| {
+        for (_, alloc) in iter {
+            if let Some(AllocState::TreeBorrows(tb)) = &alloc.1.extra.borrow_tracker {
+                tb.borrow_mut().flush_traces_to_file();
+            }
+        }
+    });
+    flush_global_stats();
+
     // Obtain the result of the execution. This is always an `Err`, but that doesn't necessarily
     // indicate an error.
     let Err(res) = res.report_err();
@@ -518,7 +530,6 @@ pub fn eval_entry<'tcx>(
                 break 'miri_error;
             }
             // Check for memory leaks.
-            info!("Additional static roots: {:?}", ecx.machine.static_roots);
             let leaks = ecx.take_leaked_allocations(|ecx| &ecx.machine.static_roots);
             if !leaks.is_empty() {
                 report_leaks(&ecx, leaks);
@@ -526,17 +537,6 @@ pub fn eval_entry<'tcx>(
                 // Ignore the provided return code - let the reported error
                 // determine the return code.
                 break 'miri_error;
-            }
-        }
-        // if let Ok(report) = guard.report().frames_post_processor(top_20_frames()).build() {
-        if let Ok(report) = guard.report().build() {
-            if let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("profile.log")
-            {
-                let _ = writeln!(file, "==== Miri Profiling Results ====");
-                let _ = writeln!(file, "{:?}", report);
             }
         }
         // The interpreter has not reported an error.

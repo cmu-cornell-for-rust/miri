@@ -19,7 +19,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         use rustc_middle::mir::BinOp::*;
 
         let this = self.eval_context_ref();
-        trace!("ptr_op: {:?} {:?} {:?}", *left, bin_op, *right);
 
         interp_ok(match bin_op {
             Eq | Ne | Lt | Le | Gt | Ge => {

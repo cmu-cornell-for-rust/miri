@@ -64,7 +64,6 @@ impl<'tcx> TlsData<'tcx> {
         let new_key = self.next_key;
         self.next_key += 1;
         self.keys.try_insert(new_key, TlsEntry { data: Default::default(), dtor }).unwrap();
-        trace!("New TLS key allocated: {} with dtor {:?}", new_key, dtor);
 
         if max_size.bits() < 128 && new_key >= (1u128 << max_size.bits()) {
             throw_unsup_format!("we ran out of TLS key space");
@@ -75,7 +74,6 @@ impl<'tcx> TlsData<'tcx> {
     pub fn delete_tls_key(&mut self, key: TlsKey) -> InterpResult<'tcx> {
         match self.keys.remove(&key) {
             Some(_) => {
-                trace!("TLS key {} removed", key);
                 interp_ok(())
             }
             None => throw_ub_format!("removing a nonexistent TLS key: {}", key),
@@ -91,7 +89,6 @@ impl<'tcx> TlsData<'tcx> {
         match self.keys.get(&key) {
             Some(TlsEntry { data, .. }) => {
                 let value = data.get(&thread_id).copied();
-                trace!("TLS key {} for thread {:?} loaded: {:?}", key, thread_id, value);
                 interp_ok(value.unwrap_or_else(|| Scalar::null_ptr(cx)))
             }
             None => throw_ub_format!("loading from a non-existing TLS key: {}", key),
@@ -108,10 +105,8 @@ impl<'tcx> TlsData<'tcx> {
         match self.keys.get_mut(&key) {
             Some(TlsEntry { data, .. }) => {
                 if new_data.to_target_usize(cx)? != 0 {
-                    trace!("TLS key {} for thread {:?} stored: {:?}", key, thread_id, new_data);
                     data.insert(thread_id, new_data);
                 } else {
-                    trace!("TLS key {} for thread {:?} removed", key, thread_id);
                     data.remove(&thread_id);
                 }
                 interp_ok(())
@@ -340,7 +335,6 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // See https://github.com/apple-oss-distributions/dyld/blob/d552c40cd1de105f0ec95008e0e0c0972de43456/dyld/DyldRuntimeState.cpp#L2277
         let dtor = this.machine.tls.macos_thread_dtors.get_mut(&thread_id).and_then(Vec::pop);
         if let Some((instance, data, span)) = dtor {
-            trace!("Running macos dtor {:?} on {:?} at {:?}", instance, data, thread_id);
 
             this.call_thread_root_function(
                 instance,
@@ -373,7 +367,6 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         };
         if let Some((instance, ptr, key, span)) = dtor {
             state.last_key = Some(key);
-            trace!("Running TLS dtor {:?} on {:?} at {:?}", instance, ptr, active_thread);
             assert!(
                 ptr.to_target_usize(this).unwrap() != 0,
                 "data can't be NULL when dtor is called!"

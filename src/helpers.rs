@@ -26,8 +26,6 @@ use crate::*;
 ///
 /// A `None` namespace indicates we are looking for a module.
 fn try_resolve_did(tcx: TyCtxt<'_>, path: &[&str], namespace: Option<Namespace>) -> Option<DefId> {
-    let _trace = enter_trace_span!("try_resolve_did", ?path);
-
     /// Yield all children of the given item, that have the given name.
     fn find_children<'tcx: 'a, 'a>(
         tcx: TyCtxt<'tcx>,
@@ -497,7 +495,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         mut action: impl FnMut(AllocRange, bool) -> InterpResult<'tcx>,
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_ref();
-        trace!("visit_frozen(place={:?}, size={:?})", *place, size);
         debug_assert_eq!(
             size,
             this.size_and_align_of_val(place)?
@@ -538,7 +535,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             let mut visitor = UnsafeCellVisitor {
                 ecx: this,
                 unsafe_cell_action: |place| {
-                    trace!("unsafe_cell_action on {:?}", place.ptr());
                     // We need a size to go on.
                     let unsafe_cell_size = this
                         .size_and_align_of_val(place)?
@@ -584,7 +580,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
             // Hook to detect `UnsafeCell`.
             fn visit_value(&mut self, v: &MPlaceTy<'tcx>) -> InterpResult<'tcx> {
-                trace!("UnsafeCellVisitor: {:?} {:?}", *v, v.layout.ty);
                 let is_unsafe_cell = match v.layout.ty.kind() {
                     ty::Adt(adt, _) =>
                         Some(adt.did()) == self.ecx.tcx.lang_items().unsafe_cell_type(),

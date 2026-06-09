@@ -337,10 +337,6 @@ impl<'tcx> Stack {
                 max = cmp::max(unk, max);
             }
             // Use `max` as new strict upper bound for everything.
-            trace!(
-                "access: forgetting stack to upper bound {max} due to wildcard or unknown access",
-                max = max.get(),
-            );
             self.set_unknown_bottom(max);
         }
 
@@ -414,9 +410,6 @@ impl<'tcx> Stack {
                 // This is approximate. Nobody knows what happened, so forget everything.
                 // The new thing is SRW anyway, so we cannot push it "on top of the unknown part"
                 // (for all we know, it might join an SRW group inside the unknown).
-                trace!(
-                    "reborrow: forgetting stack entirely due to SharedReadWrite reborrow from wildcard or unknown"
-                );
                 self.set_unknown_bottom(global.next_ptr_tag);
                 return interp_ok(());
             };
@@ -429,7 +422,6 @@ impl<'tcx> Stack {
         };
 
         // Put the new item there.
-        trace!("reborrow: adding item {:?}", new);
         self.insert(new_idx, new);
         interp_ok(())
     }
@@ -528,12 +520,6 @@ impl Stacks {
     where
         'tcx: 'ecx,
     {
-        trace!(
-            "read access with tag {:?}: {:?}, size {}",
-            tag,
-            interpret::Pointer::new(alloc_id, range.start),
-            range.size.bytes()
-        );
         let dcx = DiagnosticCxBuilder::read(machine, tag, range);
         let state = machine.borrow_tracker.as_ref().unwrap().borrow();
         self.for_each(range, dcx, |stack, dcx, exposed_tags| {
@@ -549,12 +535,6 @@ impl Stacks {
         range: AllocRange,
         machine: &MiriMachine<'tcx>,
     ) -> InterpResult<'tcx> {
-        trace!(
-            "write access with tag {:?}: {:?}, size {}",
-            tag,
-            interpret::Pointer::new(alloc_id, range.start),
-            range.size.bytes()
-        );
         let dcx = DiagnosticCxBuilder::write(machine, tag, range);
         let state = machine.borrow_tracker.as_ref().unwrap().borrow();
         self.for_each(range, dcx, |stack, dcx, exposed_tags| {
@@ -570,7 +550,6 @@ impl Stacks {
         size: Size,
         machine: &MiriMachine<'tcx>,
     ) -> InterpResult<'tcx> {
-        trace!("deallocation with tag {:?}: {:?}, size {}", tag, alloc_id, size.bytes());
         let dcx = DiagnosticCxBuilder::dealloc(machine, tag);
         let state = machine.borrow_tracker.as_ref().unwrap().borrow();
         self.for_each(alloc_range(Size::ZERO, size), dcx, |stack, dcx, exposed_tags| {
@@ -659,12 +638,6 @@ trait EvalContextPrivExt<'tcx, 'ecx>: crate::MiriInterpCxExt<'tcx> {
         };
 
         if size == Size::ZERO {
-            trace!(
-                "reborrow of size 0: reference {:?} derived from {:?} (pointee {})",
-                new_tag,
-                place.ptr(),
-                place.layout.ty,
-            );
             // Don't update any stacks for a zero-sized access; borrow stacks are per-byte and this
             // touches no bytes so there is no stack to put this tag in.
             // However, if the pointer for this operation points at a real allocation we still
@@ -693,15 +666,6 @@ trait EvalContextPrivExt<'tcx, 'ecx>: crate::MiriInterpCxExt<'tcx> {
         // a concrete ID even for wildcard pointers.
         let (alloc_id, base_offset, orig_tag) = this.ptr_get_alloc_id(place.ptr(), 0)?;
         log_creation(this, Some((alloc_id, base_offset, orig_tag)))?;
-
-        trace!(
-            "reborrow: reference {:?} derived from {:?} (pointee {}): {:?}, size {}",
-            new_tag,
-            orig_tag,
-            place.layout.ty,
-            interpret::Pointer::new(alloc_id, base_offset),
-            size.bytes()
-        );
 
         if let Some(protect) = new_perm.protector() {
             // See comment in `Stack::item_invalidated` for why we store the tag twice.
@@ -1007,7 +971,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 // if converting this alloc_id from a global to a local one
                 // uncovers a non-supported `extern static`.
                 let alloc_extra = this.get_alloc_extra(alloc_id)?;
-                trace!("Stacked Borrows tag {tag:?} exposed in {alloc_id:?}");
                 alloc_extra.borrow_tracker_sb().borrow_mut().exposed_tags.insert(tag);
             }
             AllocKind::Function | AllocKind::VTable | AllocKind::TypeId | AllocKind::Dead => {

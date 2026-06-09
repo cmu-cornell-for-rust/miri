@@ -10,7 +10,9 @@
 //!   and the relative position of the access;
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
+use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::atomic::Ordering;
 use std::{cmp, fmt, mem};
 use std::cell::Cell;
 
@@ -26,9 +28,11 @@ use super::diagnostics::{
 use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::{PermTransition, Permission};
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
+use super::fsm::{Trie, TriePtr, Transition, NOOP_TRANSITIONS};
 use super::unimap::{UniIndex, UniKeyMap, UniValMap};
 use super::wildcard::WildcardState;
 use crate::borrow_tracker::{AccessKind, GlobalState, ProtectorKind};
+use crate::data_structures::dedup_range_map::HasTrie;
 use crate::*;
 
 mod tests;
@@ -95,14 +99,15 @@ impl LocationState {
         relatedness: AccessRelatedness,
         protected: bool,
         diagnostics: &DiagnosticInfo,
-    ) -> Result<(), TransitionError> {
+    ) -> Result<bool, TransitionError> {
         // Call this function now (i.e. only if we know `relatedness`), which
         // ensures it is only called when `skip_if_known_noop` returns
         // `Recurse`, due to the contract of `traverse_this_parents_children_other`.
         self.record_new_access(access_kind, relatedness);
 
         let transition = self.perform_access(access_kind, relatedness, protected)?;
-        if !transition.is_noop() {
+        let is_noop = transition.is_noop();
+        if !is_noop {
             let node = nodes.get_mut(idx).unwrap();
             // Record the event as part of the history.
             node.debug_info
@@ -116,7 +121,7 @@ impl LocationState {
                 WildcardState::update_exposure(idx, access_type, nodes, wildcard_accesses);
             }
         }
-        Ok(())
+        Ok(is_noop)
     }
 
     /// Apply the effect of an access to one location, including
@@ -251,7 +256,6 @@ impl fmt::Display for LocationState {
 }
 /// The state of the full tree for a particular location: for all nodes, the local permissions
 /// of that node, and the tracking for wildcard accesses.
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocationTree {
     /// Maps a tag to a perm, with possible lazy initialization.
     ///
@@ -270,6 +274,47 @@ pub struct LocationTree {
     ///
     /// NOTE: same guarantees on entry initialization as for `perms`.
     pub wildcard_accesses: UniValMap<WildcardState>,
+    /// Maps each node's UniIndex to its current position in the FSM trie.
+    pub trie_map: HashMap<UniIndex, TriePtr>,
+    /// The shared FSM trie for this location range.
+    pub trie: Trie,
+}
+
+impl Clone for LocationTree {
+    fn clone(&self) -> Self {
+        Self {
+            perms: self.perms.clone(),
+            wildcard_accesses: self.wildcard_accesses.clone(),
+            trie_map: HashMap::new(),
+            trie: Trie::new(),
+        }
+    }
+}
+
+impl fmt::Debug for LocationTree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocationTree")
+            .field("perms", &self.perms)
+            .field("wildcard_accesses", &self.wildcard_accesses)
+            .finish()
+    }
+}
+
+impl PartialEq for LocationTree {
+    fn eq(&self, other: &Self) -> bool {
+        self.perms == other.perms && self.wildcard_accesses == other.wildcard_accesses
+    }
+}
+
+impl Eq for LocationTree {}
+
+impl HasTrie for LocationTree {
+    fn flush_range_traces_to_file(&self, root_tag: u64, range: std::ops::Range<u64>) {
+        self.trie.flush_traces(root_tag, range);
+    }
+    fn root_count(&self) -> usize {
+        self.trie.root.lock().unwrap().count
+    }
 }
 /// Tree structure with both parents and children since we want to be
 /// able to traverse the tree efficiently in both directions.
@@ -374,15 +419,21 @@ impl Tree {
                 ),
             );
             let wildcard_accesses = UniValMap::default();
-            DedupRangeMap::new(size, LocationTree { perms, wildcard_accesses })
+            let trie = Trie::new();
+            let mut trie_map = HashMap::new();
+            trie_map.insert(root_idx, trie.clone_root_and_inc());
+            DedupRangeMap::new(size, LocationTree { perms, wildcard_accesses, trie_map, trie })
         };
         Self { roots: SmallVec::from_slice(&[root_idx]), nodes, locations, tag_mapping }
     }
 }
 
 impl<'tcx> Tree {
-    /// Insert a new tag in the tree.
-    ///
+    pub fn flush_traces_to_file(&mut self) {
+        let root_tag = self.nodes.get(self.roots[0]).unwrap().tag.inner().get();
+        self.locations.merge_adjacent_thorough(root_tag);
+    }
+
     /// `inside_perm` defines the initial permissions for a block of memory starting at
     /// `base_offset`. These may nor may not be already marked as "accessed".
     /// `outside_perm` defines the initial permission for the rest of the allocation.
@@ -464,6 +515,7 @@ impl<'tcx> Tree {
             } else {
                 loc.wildcard_accesses.insert(idx, WildcardState::for_wildcard_root());
             }
+            loc.trie_map.insert(idx, loc.trie.clone_root_and_inc());
         }
         // If the parent is a wildcard pointer, then it doesn't track SIFA and doesn't need to be updated.
         if let Some(parent_idx) = parent_idx {
@@ -743,7 +795,8 @@ impl Tree {
         // merge some adjacent ranges that were made equal by the removal of some
         // tags (this does not necessarily mean that they have identical internal representations,
         // see the `PartialEq` impl for `UniValMap`)
-        self.locations.merge_adjacent_thorough();
+        let root_tag = self.nodes.get(self.roots[0]).unwrap().tag.inner().get();
+        self.locations.merge_adjacent_thorough(root_tag);
     }
 
     /// Checks if a node is useless and should be GC'ed.
@@ -809,6 +862,7 @@ impl Tree {
         for (_range, loc) in self.locations.iter_mut_all() {
             loc.perms.remove(this);
             loc.wildcard_accesses.remove(this);
+            loc.trie_map.remove(&this);
         }
         self.tag_mapping.remove(&node.tag);
     }
@@ -886,10 +940,8 @@ impl Tree {
             }
         }
         let root_tag = self.nodes.get(root).unwrap().tag;
-        trace!(
-            "Removed {} useless children from root tag {:?}",
-            removed_count,
-            root_tag
+        info!(
+            "E7: Pruned(t{}, {})", root_tag.inner(), removed_count
         );
     }
 }
@@ -1044,27 +1096,48 @@ impl<'tcx> LocationTree {
             let state = perm.or_insert(node.default_location_state());
 
             let protected = global.borrow().protected_tags.contains_key(&node.tag);
-            state
-                .perform_transition(
-                    args.idx,
-                    args.nodes,
-                    &mut args.data.wildcard_accesses,
-                    access_kind,
-                    args.rel_pos,
-                    protected,
-                    diagnostics,
-                )
-                .map_err(|error_kind| {
-                    TbError {
-                        error_kind,
-                        access_info: diagnostics,
-                        conflicting_node_info: &args.nodes.get(args.idx).unwrap().debug_info,
-                        accessed_node_info: Some(
-                            &args.nodes.get(access_source).unwrap().debug_info,
-                        ),
+            let is_noop_result = state.perform_transition(
+                args.idx,
+                args.nodes,
+                &mut args.data.wildcard_accesses,
+                access_kind,
+                args.rel_pos,
+                protected,
+                diagnostics,
+            );
+            match is_noop_result {
+                Ok(is_noop) => {
+                    let cur_node = if let Some(ptr) = args.data.trie_map.get(&args.idx) {
+                        ptr.clone()
+                    } else {
+                        let ptr = args.data.trie.clone_root_and_inc();
+                        args.data.trie_map.insert(args.idx, ptr.clone());
+                        ptr
+                    };
+                    if !is_noop {
+                        let trie_transition = match (access_kind, args.rel_pos.is_foreign()) {
+                            (AccessKind::Read, false) => Transition::LR,
+                            (AccessKind::Write, false) => Transition::LW,
+                            (AccessKind::Read, true) => Transition::FR,
+                            (AccessKind::Write, true) => Transition::FW,
+                        };
+                        let next_node = args.data.trie.transition(&cur_node, trie_transition);
+                        args.data.trie_map.insert(args.idx, next_node);
+                    } else {
+                        NOOP_TRANSITIONS.fetch_add(1, Ordering::Relaxed);
                     }
-                    .build()
-                })
+                    Ok(())
+                }
+                Err(error_kind) => Err(TbError {
+                    error_kind,
+                    access_info: diagnostics,
+                    conflicting_node_info: &args.nodes.get(args.idx).unwrap().debug_info,
+                    accessed_node_info: Some(
+                        &args.nodes.get(access_source).unwrap().debug_info,
+                    ),
+                }
+                .build()),
+            }
         };
 
         let visitor = TreeVisitor { nodes, data: self };
@@ -1075,9 +1148,9 @@ impl<'tcx> LocationTree {
                 visitor.traverse_nonchildren(access_source, node_skipper, node_app),
         };
         let source_tag = nodes.get(access_source).unwrap().tag;
-        trace!(
-            "Normal access from source tag {:?}: visited {} nodes, skipped {} nodes",
-            source_tag,
+        info!(
+            "E5: Access(t{}, {}, {})",
+            source_tag.inner(),
             visited_nodes.get(),
             skipped_nodes.get()
         );
@@ -1186,7 +1259,7 @@ impl<'tcx> LocationTree {
                 };
 
                 // We know the exact relatedness, so we can actually do precise checks.
-                perm.perform_transition(
+                let is_noop_result = perm.perform_transition(
                     args.idx,
                     args.nodes,
                     &mut args.data.wildcard_accesses,
@@ -1194,24 +1267,48 @@ impl<'tcx> LocationTree {
                     relatedness,
                     protected,
                     diagnostics,
-                )
-                .map_err(|trans| {
-                    let node = args.nodes.get(args.idx).unwrap();
-                    TbError {
-                        error_kind: trans,
-                        access_info: diagnostics,
-                        conflicting_node_info: &node.debug_info,
-                        accessed_node_info: access_source
-                            .map(|idx| &args.nodes.get(idx).unwrap().debug_info),
+                );
+                match is_noop_result {
+                    Ok(is_noop) => {
+                        let cur_node = if let Some(ptr) = args.data.trie_map.get(&args.idx) {
+                            ptr.clone()
+                        } else {
+                            let ptr = args.data.trie.clone_root_and_inc();
+                            args.data.trie_map.insert(args.idx, ptr.clone());
+                            ptr
+                        };
+                        if !is_noop {
+                            let trie_transition = match (access_kind, relatedness.is_foreign()) {
+                                (AccessKind::Read, false) => Transition::LR,
+                                (AccessKind::Write, false) => Transition::LW,
+                                (AccessKind::Read, true) => Transition::FR,
+                                (AccessKind::Write, true) => Transition::FW,
+                            };
+                            let next_node = args.data.trie.transition(&cur_node, trie_transition);
+                            args.data.trie_map.insert(args.idx, next_node);
+                        } else {
+                            NOOP_TRANSITIONS.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(())
                     }
-                    .build()
-                })
+                    Err(trans) => {
+                        let node = args.nodes.get(args.idx).unwrap();
+                        Err(TbError {
+                            error_kind: trans,
+                            access_info: diagnostics,
+                            conflicting_node_info: &node.debug_info,
+                            accessed_node_info: access_source
+                                .map(|idx| &args.nodes.get(idx).unwrap().debug_info),
+                        }
+                        .build())
+                    }
+                }
             },
         )?;
         let root_tag = nodes.get(root).unwrap().tag;
-        trace!(
-            "Wildcard access from root tag {:?}: visited {} nodes, skipped {} nodes",
-            root_tag,
+        info!(
+            "E5: WC Access(t{}, {}, {})",
+            root_tag.inner(),
             visited_nodes.get(),
             skipped_nodes.get()
         );

@@ -289,8 +289,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     memory_kind.expect("memory_kind is required since alloc_id is not cached");
                 let base_addr =
                     this.addr_from_alloc_id_uncached(global_state, alloc_id, memory_kind)?;
-                trace!("Assigning base address {:#x} to allocation {:?}", base_addr, alloc_id);
-
                 // Store address in cache.
                 global_state.base_addr.try_insert(alloc_id, base_addr).unwrap();
 
@@ -341,7 +339,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         if !this.is_alloc_live(alloc_id) {
             return interp_ok(());
         }
-        trace!("Exposing allocation id {alloc_id:?}");
         global_state.exposed.insert(alloc_id);
         // Release the global state before we call `expose_tag`, which may call `get_alloc_info_extra`,
         // which may need access to the global state.
@@ -353,7 +350,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     }
 
     fn ptr_from_addr_cast(&self, addr: u64) -> InterpResult<'tcx, Pointer> {
-        trace!("Casting {:#x} to a pointer", addr);
 
         let this = self.eval_context_ref();
         let global_state = this.machine.alloc_addresses.borrow();

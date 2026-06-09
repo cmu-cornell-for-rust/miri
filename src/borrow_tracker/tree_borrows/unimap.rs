@@ -21,13 +21,21 @@ use rustc_data_structures::fx::FxHashMap;
 use crate::helpers::ToUsize;
 
 /// Intermediate key between a UniKeyMap and a UniValMap.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UniIndex {
     idx: u32,
 }
 impl Debug for UniIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.idx.fmt(f)
+    }
+}
+impl UniIndex {
+    pub fn new(idx: u32) -> Self {
+        Self { idx }
+    }
+    pub fn as_u32(self) -> u32 {
+        self.idx
     }
 }
 
@@ -160,6 +168,10 @@ where
         if let Some(idx) = self.mapping.remove(key) {
             self.deassigned.push(idx);
         }
+    }
+
+    pub fn key_for_index(&self, idx: UniIndex) -> Option<&K> {
+        self.mapping.iter().find(|(_, v)| **v == idx.idx).map(|(k, _)| k)
     }
 }
 

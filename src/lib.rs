@@ -74,7 +74,7 @@ extern crate rustc_driver;
 
 mod alloc;
 mod alloc_addresses;
-mod borrow_tracker;
+pub mod borrow_tracker;
 mod clock;
 mod concurrency;
 mod data_structures;
@@ -95,7 +95,7 @@ pub use rustc_const_eval::interpret::*;
 // Resolve ambiguity.
 #[doc(no_inline)]
 pub use rustc_const_eval::interpret::{self, AllocMap, Provenance as _};
-use rustc_log::tracing::{self, info, trace};
+use rustc_log::tracing::{info, trace};
 use rustc_middle::{bug, span_bug};
 
 #[cfg(all(unix, feature = "native-lib"))]

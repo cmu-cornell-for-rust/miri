@@ -89,7 +89,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 }))
             }
             EmulateItemResult::NeedsReturn => {
-                trace!("{:?}", this.dump_place(&dest.clone().into()));
                 this.return_to_block(ret)?;
                 interp_ok(None)
             }

@@ -47,8 +47,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     fn handle_miri_start_unwind(&mut self, payload: &OpTy<'tcx>) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
 
-        trace!("miri_start_unwind: {:?}", this.frame().instance());
-
         let payload = this.read_immediate(payload)?;
         let thread = this.active_thread_mut();
         thread.unwind_payloads.push(payload);
@@ -85,7 +83,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         // Now we make a function call, and pass `data` as first and only argument.
         let f_instance = this.get_ptr_fn(try_fn)?.as_instance()?;
-        trace!("try_fn: {:?}", f_instance);
         #[allow(clippy::cloned_ref_to_slice_refs)] // the code is clearer as-is
         this.call_function(
             f_instance,
@@ -116,17 +113,12 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         unwinding: bool,
     ) -> InterpResult<'tcx, ReturnAction> {
         let this = self.eval_context_mut();
-        trace!("handle_stack_pop_unwind(extra = {:?}, unwinding = {})", extra, unwinding);
 
         // We only care about `catch_panic` if we're unwinding - if we're doing a normal
         // return, then we don't need to do anything special.
         if let (true, Some(catch_unwind)) = (unwinding, extra.catch_unwind.take()) {
             // We've just popped a frame that was pushed by `catch_unwind`,
             // and we are unwinding, so we should catch that.
-            trace!(
-                "unwinding: found catch_panic frame during unwinding: {:?}",
-                this.frame().instance()
-            );
 
             // We set the return value of `catch_unwind` to 1, since there was a panic.
             this.write_scalar(Scalar::from_i32(1), &catch_unwind.dest)?;
@@ -137,7 +129,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
             // Push the `catch_fn` stackframe.
             let f_instance = this.get_ptr_fn(catch_unwind.catch_fn)?.as_instance()?;
-            trace!("catch_fn: {:?}", f_instance);
             this.call_function(
                 f_instance,
                 ExternAbi::Rust,

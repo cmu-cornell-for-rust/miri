@@ -246,7 +246,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         // Isolation check is done via `FileDescription` trait.
 
-        trace!("Reading from FD {}, size {}", fd_num, count);
 
         // Check that the *entire* buffer is actually valid memory.
         this.check_ptr_access(buf, Size::from_bytes(count), CheckInAllocMsg::MemoryAccess)?;
@@ -261,7 +260,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         // Get the FD.
         let Some(fd) = this.machine.fds.get(fd_num) else {
-            trace!("read: FD not found");
             return this.set_last_error_and_return(LibcError("EBADF"), dest);
         };
 
@@ -285,7 +283,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             count
         };
 
-        trace!("read: FD mapped to {fd:?}");
         // We want to read at most `count` bytes. We are sure that `count` is not negative
         // because it was a target's `usize`. Also we are sure that it's smaller than
         // `usize::MAX` because it is bounded by the host's `isize`.

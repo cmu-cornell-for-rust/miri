@@ -134,18 +134,12 @@ impl RwLock {
     #[inline]
     /// Check if locked.
     fn is_locked(&self) -> bool {
-        trace!(
-            "rwlock_is_locked: writer is {:?} and there are {} reader threads (some of which could hold multiple read locks)",
-            self.writer,
-            self.readers.len(),
-        );
         self.writer.is_some() || self.readers.is_empty().not()
     }
 
     /// Check if write locked.
     #[inline]
     fn is_write_locked(&self) -> bool {
-        trace!("rwlock_is_write_locked: writer is {:?}", self.writer);
         self.writer.is_some()
     }
 }
@@ -508,7 +502,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     fn rwlock_reader_lock(&mut self, rwlock_ref: &RwLockRef) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
         let thread = this.active_thread();
-        trace!("rwlock_reader_lock: now also held (one more time) by {:?}", thread);
         let mut rwlock = rwlock_ref.0.borrow_mut();
         assert!(!rwlock.is_write_locked(), "the lock is write locked");
         let count = rwlock.readers.entry(thread).or_insert(0);
@@ -529,10 +522,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 assert!(*count > 0, "rwlock locked with count == 0");
                 *count -= 1;
                 if *count == 0 {
-                    trace!("rwlock_reader_unlock: no longer held by {:?}", thread);
                     entry.remove();
-                } else {
-                    trace!("rwlock_reader_unlock: held one less time by {:?}", thread);
                 }
             }
             Entry::Vacant(_) => return interp_ok(false), // we did not even own this lock
@@ -595,7 +585,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     fn rwlock_writer_lock(&mut self, rwlock_ref: &RwLockRef) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
         let thread = this.active_thread();
-        trace!("rwlock_writer_lock: now held by {:?}", thread);
 
         let mut rwlock = rwlock_ref.0.borrow_mut();
         assert!(!rwlock.is_locked(), "the rwlock is already locked");
@@ -617,7 +606,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 return interp_ok(false);
             }
             rwlock.writer = None;
-            trace!("rwlock_writer_unlock: unlocked by {:?}", thread);
             // Record release clock for next lock holder.
             this.release_clock(|clock| rwlock.clock_unlocked.clone_from(clock))?;
 

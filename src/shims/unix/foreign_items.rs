@@ -207,7 +207,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 let fd = this.read_scalar(fd)?.to_i32()?;
                 let buf = this.read_pointer(buf)?;
                 let count = this.read_target_usize(n)?;
-                trace!("Called write({:?}, {:?}, {:?})", fd, buf, count);
                 this.write(fd, buf, count, None, dest)?;
             }
             "pread" => {
@@ -236,7 +235,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 let buf = this.read_pointer(buf)?;
                 let count = this.read_target_usize(n)?;
                 let offset = this.read_scalar(offset)?.to_int(offset.layout.size)?;
-                trace!("Called pwrite({:?}, {:?}, {:?}, {:?})", fd, buf, count, offset);
                 this.write(fd, buf, count, Some(offset), dest)?;
             }
             "close" => {

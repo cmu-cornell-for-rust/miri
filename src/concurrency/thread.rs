@@ -540,11 +540,6 @@ impl<'tcx> ThreadManager<'tcx> {
     /// Set an active thread and return the id of the thread that was active before.
     fn set_active_thread_id(&mut self, id: ThreadId) -> ThreadId {
         assert!(id.index() < self.threads.len());
-        info!(
-            "---------- Now executing on thread `{}` (previous: `{}`) ----------------------------------------",
-            self.get_thread_display_name(id),
-            self.get_thread_display_name(self.active_thread)
-        );
         std::mem::replace(&mut self.active_thread, id)
     }
 
@@ -604,7 +599,6 @@ impl<'tcx> ThreadManager<'tcx> {
     /// > The handle is valid until closed, even after the thread it represents has been terminated.
     fn detach_thread(&mut self, id: ThreadId, allow_terminated_joined: bool) -> InterpResult<'tcx> {
         // NOTE: In GenMC mode, we treat detached threads like regular threads that are never joined, so there is no special handling required here.
-        trace!("detaching {:?}", id);
 
         let is_ub = if allow_terminated_joined && self.threads[id].state.is_terminated() {
             // "Detached" in particular means "not yet joined". Redundant detaching is still UB.
@@ -748,9 +742,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                     .state
                     .is_blocked_on(BlockReason::Genmc)
                 {
-                    info!(
-                        "GenMC: scheduling blocked thread {next_thread_id:?}, so we unblock it now."
-                    );
                     this.unblock_thread(next_thread_id, BlockReason::Genmc)?;
                 }
                 // The thread we just unblocked may have been blocked again during the unblocking callback.
@@ -811,11 +802,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         if let Some((id, _thread)) = new_thread {
             if thread_manager.active_thread != id {
-                info!(
-                    "---------- Now executing on thread `{}` (previous: `{}`) ----------------------------------------",
-                    thread_manager.get_thread_display_name(id),
-                    thread_manager.get_thread_display_name(thread_manager.active_thread)
-                );
                 thread_manager.active_thread = id;
             }
         }
@@ -992,10 +978,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                         this.deallocate_ptr(ptr.into(), None, MiriMemoryKind::Tls.into())?,
                     TlsAllocAction::Leak =>
                         if let Some(alloc) = ptr.provenance.get_alloc_id() {
-                            trace!(
-                                "Thread-local static leaked and stored as static root: {:?}",
-                                alloc
-                            );
                             this.machine.static_roots.push(alloc);
                         },
                 }
@@ -1135,10 +1117,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // threads try to join it.
         thread_mgr.threads[joined_thread_id].join_status = ThreadJoinStatus::Joined;
         if !thread_mgr.threads[joined_thread_id].state.is_terminated() {
-            trace!(
-                "{:?} blocked on {:?} when trying to join",
-                thread_mgr.active_thread, joined_thread_id
-            );
             if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
                 genmc_ctx.handle_thread_join(thread_mgr.active_thread, joined_thread_id)?;
             }

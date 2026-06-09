@@ -608,7 +608,6 @@ impl MemoryCellClocks {
         index: VectorIdx,
         access_size: Size,
     ) -> Result<(), DataRace> {
-        trace!("Atomic read with vectors: {:#?} :: {:#?}", self, thread_clocks);
         let atomic = self.atomic_access(thread_clocks, access_size, /*write*/ false)?;
         atomic.read_vector.set_at_index(&thread_clocks.clock, index);
         // Make sure the last non-atomic write was before this access.
@@ -623,7 +622,6 @@ impl MemoryCellClocks {
         index: VectorIdx,
         access_size: Size,
     ) -> Result<(), DataRace> {
-        trace!("Atomic write with vectors: {:#?} :: {:#?}", self, thread_clocks);
         let atomic = self.atomic_access(thread_clocks, access_size, /*write*/ true)?;
         atomic.write_vector.set_at_index(&thread_clocks.clock, index);
         // Make sure the last non-atomic write and all non-atomic reads were before this access.
@@ -643,7 +641,6 @@ impl MemoryCellClocks {
         read_type: NaReadType,
         current_span: Span,
     ) -> Result<(), DataRace> {
-        trace!("Unsynchronized read with vectors: {:#?} :: {:#?}", self, thread_clocks);
         if !current_span.is_dummy() {
             thread_clocks.clock.index_mut(index).span = current_span;
         }
@@ -670,7 +667,6 @@ impl MemoryCellClocks {
         write_type: NaWriteType,
         current_span: Span,
     ) -> Result<(), DataRace> {
-        trace!("Unsynchronized write with vectors: {:#?} :: {:#?}", self, thread_clocks);
         if !current_span.is_dummy() {
             thread_clocks.clock.index_mut(index).span = current_span;
         }
@@ -1060,7 +1056,6 @@ impl VClockAlloc {
     // Find an index, if one exists where the value
     // in `l` is greater than the value in `r`.
     fn find_gt_index(l: &VClock, r: &VClock) -> Option<VectorIdx> {
-        trace!("Find index where not {:?} <= {:?}", l, r);
         let l_slice = l.as_slice();
         let r_slice = r.as_slice();
         l_slice
@@ -1594,13 +1589,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         // Load and log the atomic operation.
         // Note that atomic loads are possible even from read-only allocations, so `get_alloc_extra_mut` is not an option.
         let alloc_meta = this.get_alloc_extra(alloc_id)?.data_race.as_vclocks_ref().unwrap();
-        trace!(
-            "Atomic op({}) with ordering {:?} on {:?} (size={})",
-            access.description(None, None),
-            &atomic,
-            place.ptr(),
-            size.bytes()
-        );
 
         let current_span = this.machine.current_user_relevant_span();
         // Perform the atomic operation.
@@ -1633,18 +1621,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                 interp_ok(true)
             },
         )?;
-
-        // Log changes to atomic memory.
-        if tracing::enabled!(tracing::Level::TRACE) {
-            for (_offset, mem_clocks) in alloc_meta.alloc_ranges.borrow().iter(base_offset, size) {
-                trace!(
-                    "Updated atomic memory({:?}, size={}) to {:#?}",
-                    place.ptr(),
-                    size.bytes(),
-                    mem_clocks.atomic_ops
-                );
-            }
-        }
 
         interp_ok(())
     }
@@ -1766,8 +1742,6 @@ impl GlobalState {
             vector_info.push(thread)
         };
 
-        trace!("Creating thread = {:?} with vector index = {:?}", thread, created_index);
-
         // Mark the chosen vector index as in use by the thread.
         thread_info[thread].vector_index = Some(created_index);
 
@@ -1858,7 +1832,6 @@ impl GlobalState {
     ) -> InterpResult<'tcx> {
         let current_span = machine.current_user_relevant_span();
         self.maybe_perform_sync_operation(&machine.threads, current_span, |index, mut clocks| {
-            trace!("Atomic fence on {:?} with ordering {:?}", index, atomic);
 
             // Apply data-race detection for the current fences
             // this treats AcqRel and SeqCst as the same as an acquire

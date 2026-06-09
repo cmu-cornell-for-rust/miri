@@ -9,6 +9,11 @@ use std::ops;
 
 use rustc_abi::Size;
 
+pub trait HasTrie {
+    fn flush_range_traces_to_file(&self, root_tag: u64, range: std::ops::Range<u64>);
+    fn root_count(&self) -> usize;
+}
+
 #[derive(Clone, Debug)]
 struct Elem<T> {
     /// The range covered by this element; never empty.
@@ -222,13 +227,14 @@ impl<T> DedupRangeMap<T> {
         slice.iter_mut().map(|elem| (elem.range.clone(), &mut elem.data))
     }
 
-    /// Remove all adjacent duplicates
-    pub fn merge_adjacent_thorough(&mut self)
+    /// Remove all adjacent duplicates, flushing trie traces for each element first.
+    pub fn merge_adjacent_thorough(&mut self, root_tag: u64)
     where
-        T: PartialEq,
+        T: PartialEq + HasTrie,
     {
         let clean = Vec::with_capacity(self.v.len());
         for elem in std::mem::replace(&mut self.v, clean) {
+            elem.data.flush_range_traces_to_file(root_tag, elem.range.clone());
             if let Some(prev) = self.v.last_mut() {
                 if prev.data == elem.data {
                     assert_eq!(prev.range.end, elem.range.start);

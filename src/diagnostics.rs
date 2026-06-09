@@ -489,16 +489,6 @@ pub fn report_result<'tcx>(
         );
     }
 
-    // Debug-dump all locals.
-    for (i, frame) in ecx.active_thread_stack().iter().enumerate() {
-        trace!("-------------------");
-        trace!("Frame {}", i);
-        trace!("    return: {:?}", frame.return_place);
-        for (i, local) in frame.locals.iter().enumerate() {
-            trace!("    local {}: {:?}", i, local);
-        }
-    }
-
     None
 }
 

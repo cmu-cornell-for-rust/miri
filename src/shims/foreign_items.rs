@@ -75,7 +75,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // The rest either implements the logic, or falls back to `lookup_exported_symbol`.
         match this.emulate_foreign_item_inner(link_name, abi, args, &dest)? {
             EmulateItemResult::NeedsReturn => {
-                trace!("{:?}", this.dump_place(&dest.clone().into()));
                 this.return_to_block(ret)?;
             }
             EmulateItemResult::NeedsUnwind => {
