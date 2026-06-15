@@ -75,11 +75,10 @@ impl AllocState {
         prov: ProvenanceExtra,
         range: AllocRange,
         machine: &MiriMachine<'tcx>,
-    ) -> InterpResult<'tcx> {
-        let global = machine.borrow_tracker.as_ref().unwrap();
-        
+    ) -> InterpResult<'tcx> {        
         match self {
             AllocState::Init(tree) => {
+                let global = machine.borrow_tracker.as_ref().unwrap();
                 trace!(
                     "{} with tag {:?}: {:?}, size {}",
                     access_kind,
@@ -112,11 +111,10 @@ impl AllocState {
         prov: ProvenanceExtra,
         size: Size,
         machine: &MiriMachine<'tcx>,
-    ) -> InterpResult<'tcx> {
-        let global = machine.borrow_tracker.as_ref().unwrap();
-        
+    ) -> InterpResult<'tcx> {        
         match self {
             AllocState::Init(tree) => {
+                let global = machine.borrow_tracker.as_ref().unwrap();
                 let span = machine.current_user_relevant_span();
                 tree.dealloc(prov, alloc_range(Size::ZERO, size), global, alloc_id, span, machine)
             }
@@ -127,12 +125,17 @@ impl AllocState {
     }
 
     /// A tag just lost its protector.
+    ///
+    /// This emits a special kind of access that is only applied
+    /// to accessed locations, as a protection against other
+    /// tags not having been made aware of the existence of this
+    /// protector.
     pub fn release_protector<'tcx>(
         &mut self,
         machine: &MiriMachine<'tcx>,
         global: &GlobalState,
         tag: BorTag,
-        alloc_id: AllocId,
+        alloc_id: AllocId, // diagnostics
     ) -> InterpResult<'tcx> {
         
         match self {
@@ -202,16 +205,13 @@ impl AllocState {
     }
 
     /// Wrapper for Tree::expose_tag
-    pub fn expose_tag<'tcx>(
+    pub fn expose_tag(
         &mut self,
         tag: BorTag,
         protected: bool,
-        _machine: &MiriMachine<'tcx>,
-        _global: &GlobalState,
     ) {
         match self {
             AllocState::Init(tree) => tree.expose_tag(tag, protected),
-            // The only tag that can be exposed before the tree exists is the root tag.
             // Record the exposure here and apply it in `ensure_initialized`.
             AllocState::Uninit { exposed, .. } => *exposed = true,
         }
@@ -222,8 +222,6 @@ impl AllocState {
         &mut self,
         protected_tags: &FxHashMap<BorTag, ProtectorKind>,
         show_unnamed: bool,
-        _machine: &MiriMachine<'tcx>,
-        _global: &GlobalState,
     ) -> InterpResult<'tcx> {
         match self {
             AllocState::Init(tree) => {
@@ -241,8 +239,6 @@ impl AllocState {
         tag: BorTag,
         nth_parent: u8,
         name: &str,
-        _machine: &MiriMachine<'tcx>,
-        _global: &GlobalState,
     ) -> InterpResult<'tcx> {
         match self {
             AllocState::Init(tree) => {
@@ -710,12 +706,9 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 trace!("Tree Borrows tag {tag:?} exposed in {alloc_id:?}");
 
                 let global = this.machine.borrow_tracker.as_ref().unwrap();
-                let protected = {
-                    let global_borrow = global.borrow();
-                    global_borrow.protected_tags.contains_key(&tag)
-                };
-                let mut tree_borrows = alloc_extra.borrow_tracker_tb().borrow_mut();
-                tree_borrows.expose_tag(tag, protected, &this.machine, global);
+                let protected_tags = &global.borrow().protected_tags;
+                let protected = protected_tags.contains_key(&tag);
+                alloc_extra.borrow_tracker_tb().borrow_mut().expose_tag(tag, protected);
             }
             AllocKind::Function
             | AllocKind::VTable
@@ -733,9 +726,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
         let alloc_extra = this.get_alloc_extra(alloc_id)?;
         let mut tree_borrows = alloc_extra.borrow_tracker_tb().borrow_mut();
-        let global = this.machine.borrow_tracker.as_ref().unwrap();
-        let protected_tags = global.borrow().protected_tags.clone();
-        tree_borrows.print_tree(&protected_tags, show_unnamed, &this.machine, global)
+        let borrow_tracker = &this.machine.borrow_tracker.as_ref().unwrap().borrow();
+        tree_borrows.print_tree(&borrow_tracker.protected_tags, show_unnamed)
     }
 
     /// Give a name to the pointer, usually the name it has in the source code (for debugging).
@@ -761,7 +753,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         };
         let alloc_extra = this.get_alloc_extra(alloc_id)?;
         let mut tree_borrows = alloc_extra.borrow_tracker_tb().borrow_mut();
-        let global = this.machine.borrow_tracker.as_ref().unwrap();
-        tree_borrows.give_pointer_debug_name(tag, nth_parent, name, &this.machine, global)
+        tree_borrows.give_pointer_debug_name(tag, nth_parent, name)
     }
 }
