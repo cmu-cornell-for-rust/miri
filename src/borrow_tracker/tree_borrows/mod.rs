@@ -124,12 +124,17 @@ impl AllocState {
     }
 
     /// A tag just lost its protector.
+    ///
+    /// This emits a special kind of access that is only applied
+    /// to accessed locations, as a protection against other
+    /// tags not having been made aware of the existence of this
+    /// protector.
     pub fn release_protector<'tcx>(
         &mut self,
         machine: &MiriMachine<'tcx>,
         global: &GlobalState,
         tag: BorTag,
-        alloc_id: AllocId,
+        alloc_id: AllocId, // diagnostics
     ) -> InterpResult<'tcx> {
         
         match self {
