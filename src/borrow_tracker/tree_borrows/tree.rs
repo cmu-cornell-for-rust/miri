@@ -772,8 +772,11 @@ impl Tree {
         // we know that `node` is not protected because otherwise `live` would
         // have contained `node.tag`.
 
-        // Check that for every child, `can_be_replaced_by_child` holds for the permission
-        // on all locations.
+        // Children only have siblings (and thus see sibling-induced foreign accesses) if there is
+        // more than one of them.
+        let has_siblings = node.children.len() > 1;
+
+        // Check that the node can be replaced by each child's permission on every location.
         node.children.iter().all(|&child_idx| {
             let child = self.nodes.get(child_idx).unwrap();
             self.locations.iter_all().all(|(_range, loc)| {
@@ -787,7 +790,11 @@ impl Tree {
                     .get(child_idx)
                     .map(|x| x.permission)
                     .unwrap_or_else(|| child.default_initial_perm);
-                parent_perm.can_be_replaced_by_child(child_perm)
+                if has_siblings {
+                    parent_perm.can_be_replaced_by_children(child_perm)
+                } else {
+                    parent_perm.can_be_replaced_by_child(child_perm)
+                }
             })
         })
     }
