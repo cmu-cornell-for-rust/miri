@@ -172,6 +172,9 @@ pub struct MiriConfig {
     pub short_fd_operations: bool,
     /// A list of crates that are considered user-relevant.
     pub user_relevant_crates: Vec<String>,
+    /// Whether allocations made by the test harness (libtest) and the language runtime get
+    /// borrow-tracked. Disabled by `-Zmiri-disable-harness-borrow-tracking`.
+    pub harness_borrow_tracking: bool,
 }
 
 impl Default for MiriConfig {
@@ -215,6 +218,7 @@ impl Default for MiriConfig {
             float_rounding_error: FloatRoundingErrorMode::Random,
             short_fd_operations: true,
             user_relevant_crates: vec![],
+            harness_borrow_tracking: true,
         }
     }
 }

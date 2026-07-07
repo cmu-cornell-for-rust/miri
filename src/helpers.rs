@@ -1028,6 +1028,26 @@ impl<'tcx> MiriMachine<'tcx> {
             1
         }
     }
+
+    /// This is the source of truth for the `in_harness` flag in our `FrameExtra`.
+    ///
+    /// Determines whether a frame that is about to be pushed executes "harness" code: code that
+    /// runs on behalf of the test harness (or the language runtime) rather than on behalf of
+    /// user-relevant code. Harness-ness is decided by the closest frame that is either
+    /// user-relevant or part of libtest; frames in other non-user-relevant crates inherit it from
+    /// their caller. Code running without any caller (e.g. runtime startup before `main`, or the
+    /// start of a new thread) counts as harness code until a user-relevant frame is entered.
+    pub fn frame_in_harness(&self, frame: &Frame<'tcx, Provenance>) -> bool {
+        if self.is_local(frame.instance()) {
+            false
+        } else if self.harness_crates.contains(&frame.instance().def_id().krate) {
+            true
+        } else {
+            // Inherit from the caller, i.e. the current top of the stack (this frame is not
+            // pushed yet).
+            self.stack().last().is_none_or(|caller| caller.extra.in_harness)
+        }
+    }
 }
 
 pub fn isolation_abort_error<'tcx>(name: &str) -> InterpResult<'tcx> {

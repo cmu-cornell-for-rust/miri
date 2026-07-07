@@ -208,7 +208,11 @@ fn remove_unreachable_tags<'tcx>(ecx: &mut MiriInterpCx<'tcx>, tags: FxHashSet<B
     if ecx.machine.borrow_tracker.is_some() {
         ecx.memory.alloc_map().iter(|it| {
             for (_id, (_kind, alloc)) in it {
-                alloc.extra.borrow_tracker.as_ref().unwrap().remove_unreachable_tags(&tags);
+                // Not all allocations are borrow-tracked
+                // (see `-Zmiri-disable-harness-borrow-tracking`).
+                if let Some(borrow_tracker) = &alloc.extra.borrow_tracker {
+                    borrow_tracker.remove_unreachable_tags(&tags);
+                }
             }
         });
     }

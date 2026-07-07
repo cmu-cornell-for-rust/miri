@@ -427,6 +427,13 @@ to Miri failing to detect cases of undefined behavior in a program.
   Using this flag is **unsound**.
 * `-Zmiri-disable-data-race-detector` disables checking for data races.  Using
   this flag is **unsound**. This implies `-Zmiri-disable-weak-memory-emulation`.
+* `-Zmiri-disable-harness-borrow-tracking` disables borrow tracking (Stacked/Tree Borrows) for
+  allocations that are made by the test harness (libtest) or the language runtime rather than by
+  user-relevant code. Such allocations get no borrow tracker state at all: references into them are
+  not retagged, and no aliasing checks are performed for them. This reduces the overhead that the
+  test harness incurs under `cargo miri test`, but it means Miri will miss aliasing violations
+  involving this memory (even when user code operates on it later), so using this flag is
+  **unsound**. All other checks (validity, data races, bounds) remain enabled everywhere.
 * `-Zmiri-disable-stacked-borrows` disables checking the experimental
   aliasing rules to track borrows ([Stacked Borrows] and [Tree Borrows]).
   This can make Miri run faster, but it also means no aliasing violations will

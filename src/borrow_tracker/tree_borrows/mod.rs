@@ -288,6 +288,18 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         log_creation(this, Some((alloc_id, base_offset, parent_prov)))?;
 
+        // The alloc kind matters here: `get_alloc_extra` fails on Function/VTable/... allocations.
+        let alloc_kind = this.get_alloc_info(alloc_id).kind;
+        if matches!(alloc_kind, AllocKind::LiveData)
+            && this.get_alloc_extra(alloc_id)?.borrow_tracker.is_none()
+        {
+            // This allocation is not borrow-tracked (see
+            // `-Zmiri-disable-harness-borrow-tracking`), so there is no retagging either: the
+            // pointer keeps the provenance it already has, and no protector is added.
+            trace!("reborrow of untracked allocation {alloc_id:?}: keeping parent provenance");
+            return interp_ok(place.ptr().provenance);
+        }
+
         trace!(
             "reborrow: reference {:?} derived from {:?} (pointee {}): {:?}, size {}",
             new_tag,
@@ -317,7 +329,6 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 .insert(new_tag, protect);
         }
 
-        let alloc_kind = this.get_alloc_info(alloc_id).kind;
         if !matches!(alloc_kind, AllocKind::LiveData) {
             assert_eq!(ptr_size, Size::ZERO); // we did the deref check above, size has to be 0 here
             // There's not actually any bytes here where accesses could even be tracked.
@@ -546,10 +557,13 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 let alloc_extra = this.get_alloc_extra(alloc_id)?;
                 trace!("Tree Borrows tag {tag:?} exposed in {alloc_id:?}");
 
-                let global = this.machine.borrow_tracker.as_ref().unwrap();
-                let protected_tags = &global.borrow().protected_tags;
-                let protected = protected_tags.contains_key(&tag);
-                alloc_extra.borrow_tracker_tb().borrow_mut().expose_tag(tag, protected);
+                // Allocations that are not borrow-tracked have no tree the tag could occur in.
+                if alloc_extra.borrow_tracker.is_some() {
+                    let global = this.machine.borrow_tracker.as_ref().unwrap();
+                    let protected_tags = &global.borrow().protected_tags;
+                    let protected = protected_tags.contains_key(&tag);
+                    alloc_extra.borrow_tracker_tb().borrow_mut().expose_tag(tag, protected);
+                }
             }
             AllocKind::Function
             | AllocKind::VTable
@@ -566,6 +580,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     fn print_tree(&mut self, alloc_id: AllocId, show_unnamed: bool) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
         let alloc_extra = this.get_alloc_extra(alloc_id)?;
+        if alloc_extra.borrow_tracker.is_none() {
+            eprintln!("{alloc_id:?} is not borrow-tracked, so there is no tree to print");
+            return interp_ok(());
+        }
         let tree_borrows = alloc_extra.borrow_tracker_tb().borrow();
         let borrow_tracker = &this.machine.borrow_tracker.as_ref().unwrap().borrow();
         tree_borrows.print_tree(&borrow_tracker.protected_tags, show_unnamed)
@@ -593,6 +611,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         };
         let alloc_extra = this.get_alloc_extra(alloc_id)?;
+        if alloc_extra.borrow_tracker.is_none() {
+            eprintln!("Can't give the name {name} to pointer into untracked allocation");
+            return interp_ok(());
+        }
         let mut tree_borrows = alloc_extra.borrow_tracker_tb().borrow_mut();
         tree_borrows.give_pointer_debug_name(tag, nth_parent, name)
     }

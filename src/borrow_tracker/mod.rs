@@ -385,6 +385,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             let kind = this.get_alloc_info(*alloc_id).kind;
             if matches!(kind, AllocKind::LiveData) {
                 let alloc_extra = this.get_alloc_extra(*alloc_id)?; // can still fail for `extern static`
+                // This `unwrap` cannot fail: protectors are only ever registered for
+                // borrow-tracked allocations (`reborrow` skips untracked allocations entirely).
                 let alloc_borrow_tracker = &alloc_extra.borrow_tracker.as_ref().unwrap();
                 alloc_borrow_tracker.release_protector(
                     &this.machine,

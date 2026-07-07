@@ -639,6 +639,11 @@ trait EvalContextPrivExt<'tcx, 'ecx>: crate::MiriInterpCxExt<'tcx> {
                     // if converting this alloc_id from a global to a local one
                     // uncovers a non-supported `extern static`.
                     let extra = this.get_alloc_extra(alloc_id)?;
+                    if extra.borrow_tracker.is_none() {
+                        // This allocation is not borrow-tracked, so there is no history to log
+                        // the creation in.
+                        return interp_ok(());
+                    }
                     let mut stacked_borrows = extra
                         .borrow_tracker_sb()
                         .borrow_mut();
@@ -699,6 +704,16 @@ trait EvalContextPrivExt<'tcx, 'ecx>: crate::MiriInterpCxExt<'tcx> {
         // a concrete ID even for wildcard pointers.
         let (alloc_id, base_offset, orig_tag) = this.ptr_get_alloc_id(place.ptr(), 0)?;
         log_creation(this, Some((alloc_id, base_offset, orig_tag)))?;
+
+        // We just did a successful dereferenceable check for a non-zero size, so this must be
+        // live data and `get_alloc_extra` will succeed.
+        if this.get_alloc_extra(alloc_id)?.borrow_tracker.is_none() {
+            // This allocation is not borrow-tracked (see
+            // `-Zmiri-disable-harness-borrow-tracking`), so there is no retagging either: the
+            // pointer keeps the provenance it already has, and no protector is added.
+            trace!("reborrow of untracked allocation {alloc_id:?}: keeping parent provenance");
+            return interp_ok(place.ptr().provenance);
+        }
 
         trace!(
             "reborrow: reference {:?} derived from {:?} (pointee {}) with permissions {new_perm:?}: {:?}, size {}",
@@ -911,7 +926,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 // uncovers a non-supported `extern static`.
                 let alloc_extra = this.get_alloc_extra(alloc_id)?;
                 trace!("Stacked Borrows tag {tag:?} exposed in {alloc_id:?}");
-                alloc_extra.borrow_tracker_sb().borrow_mut().exposed_tags.insert(tag);
+                // Allocations that are not borrow-tracked have no stacks the tag could occur in.
+                if alloc_extra.borrow_tracker.is_some() {
+                    alloc_extra.borrow_tracker_sb().borrow_mut().exposed_tags.insert(tag);
+                }
             }
             AllocKind::Function
             | AllocKind::VTable
@@ -927,6 +945,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     fn print_stacks(&mut self, alloc_id: AllocId) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
         let alloc_extra = this.get_alloc_extra(alloc_id)?;
+        if alloc_extra.borrow_tracker.is_none() {
+            eprintln!("{alloc_id:?} is not borrow-tracked, so there are no stacks to print");
+            return interp_ok(());
+        }
         let stacks = alloc_extra.borrow_tracker_sb().borrow();
         for (range, stack) in stacks.stacks.iter_all() {
             print!("{range:?}: [");

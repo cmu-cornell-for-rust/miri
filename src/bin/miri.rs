@@ -509,6 +509,8 @@ fn main() -> ExitCode {
         } else if arg == "-Zmiri-disable-data-race-detector" {
             miri_config.data_race_detector = false;
             miri_config.weak_memory_emulation = false;
+        } else if arg == "-Zmiri-disable-harness-borrow-tracking" {
+            miri_config.harness_borrow_tracking = false;
         } else if arg == "-Zmiri-disable-alignment-check" {
             miri_config.check_alignment = miri::AlignmentCheck::None;
         } else if arg == "-Zmiri-symbolic-alignment-check" {

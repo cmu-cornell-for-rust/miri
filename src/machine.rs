@@ -147,6 +147,11 @@ pub struct FrameExtra<'tcx> {
     /// relevant.
     pub user_relevance: u8,
 
+    /// Whether this frame executes "harness" code: code running on behalf of the test harness or
+    /// the language runtime rather than on behalf of user-relevant code. See
+    /// `MiriMachine::frame_in_harness` for how this is determined.
+    pub in_harness: bool,
+
     /// Data race detector per-frame data.
     pub data_race: Option<data_race::FrameState>,
 }
@@ -154,12 +159,19 @@ pub struct FrameExtra<'tcx> {
 impl<'tcx> std::fmt::Debug for FrameExtra<'tcx> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Omitting `timing`, it does not support `Debug`.
-        let FrameExtra { borrow_tracker, catch_unwind, timing: _, user_relevance, data_race } =
-            self;
+        let FrameExtra {
+            borrow_tracker,
+            catch_unwind,
+            timing: _,
+            user_relevance,
+            in_harness,
+            data_race,
+        } = self;
         f.debug_struct("FrameData")
             .field("borrow_tracker", borrow_tracker)
             .field("catch_unwind", catch_unwind)
             .field("user_relevance", user_relevance)
+            .field("in_harness", in_harness)
             .field("data_race", data_race)
             .finish()
     }
@@ -167,8 +179,14 @@ impl<'tcx> std::fmt::Debug for FrameExtra<'tcx> {
 
 impl VisitProvenance for FrameExtra<'_> {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
-        let FrameExtra { catch_unwind, borrow_tracker, timing: _, user_relevance: _, data_race: _ } =
-            self;
+        let FrameExtra {
+            catch_unwind,
+            borrow_tracker,
+            timing: _,
+            user_relevance: _,
+            in_harness: _,
+            data_race: _,
+        } = self;
 
         catch_unwind.visit_provenance(visit);
         borrow_tracker.visit_provenance(visit);
@@ -573,6 +591,12 @@ pub struct MiriMachine<'tcx> {
     /// Crates which are considered user-relevant for the purposes of error reporting.
     pub(crate) user_relevant_crates: Vec<CrateNum>,
 
+    /// Whether allocations made by harness/runtime code get borrow-tracked.
+    /// `-Zmiri-disable-harness-borrow-tracking` sets this to `false`.
+    pub(crate) harness_borrow_tracking: bool,
+    /// Crates whose frames mark execution as "harness" code (i.e., libtest).
+    pub(crate) harness_crates: Vec<CrateNum>,
+
     /// Mapping extern static names to their pointer.
     pub(crate) extern_statics: FxHashMap<Symbol, StrictPointer>,
     /// A pointer to the allocation we provide for non-existent weak symbols.
@@ -680,6 +704,7 @@ impl<'tcx> MiriMachine<'tcx> {
     ) -> Self {
         let tcx = layout_cx.tcx();
         let user_relevant_crates = Self::get_user_relevant_crates(tcx, config);
+        let harness_crates = Self::get_harness_crates(tcx);
         let layouts =
             PrimitiveLayouts::new(layout_cx).expect("Couldn't get layouts of primitive types");
         let profiler = config.measureme_out.as_ref().map(|out| {
@@ -782,6 +807,8 @@ impl<'tcx> MiriMachine<'tcx> {
             exported_symbols_cache: FxHashMap::default(),
             backtrace_style: config.backtrace_style,
             user_relevant_crates,
+            harness_borrow_tracking: config.harness_borrow_tracking,
+            harness_crates,
             extern_statics: FxHashMap::default(),
             missing_weak_symbol: None,
             rng: RefCell::new(rng),
@@ -898,6 +925,15 @@ impl<'tcx> MiriMachine<'tcx> {
         local_crates
     }
 
+    /// Retrieve the list of crates that make up the test harness (i.e., libtest).
+    fn get_harness_crates(tcx: TyCtxt<'_>) -> Vec<CrateNum> {
+        tcx.crates(())
+            .iter()
+            .copied()
+            .filter(|&crate_num| tcx.crate_name(crate_num).as_str() == "test")
+            .collect()
+    }
+
     pub(crate) fn late_init(
         ecx: &mut MiriInterpCx<'tcx>,
         config: &MiriConfig,
@@ -953,6 +989,33 @@ impl<'tcx> MiriMachine<'tcx> {
             .map(Span::data)
     }
 
+    /// Whether an allocation of the given kind, made in the current context, is attributed to the
+    /// test harness / language runtime rather than to user-relevant code. Only stack and heap
+    /// allocations are attributed to the currently executing code; other kinds (globals, TLS,
+    /// machine-managed memory) may be initialized lazily by whatever code happens to touch them
+    /// first, so they get no attribution.
+    fn alloc_in_harness(ecx: &MiriInterpCx<'tcx>, kind: MemoryKind) -> bool {
+        let attributable = matches!(
+            kind,
+            MemoryKind::Stack
+                | MemoryKind::Machine(
+                    MiriMemoryKind::Rust
+                        | MiriMemoryKind::Miri
+                        | MiriMemoryKind::C
+                        | MiriMemoryKind::WinHeap
+                        | MiriMemoryKind::WinLocal
+                        | MiriMemoryKind::Mmap
+                )
+        );
+        attributable
+            && ecx
+                .machine
+                .threads
+                .active_thread_stack()
+                .last()
+                .is_none_or(|frame| frame.extra.in_harness)
+    }
+
     fn init_allocation(
         ecx: &MiriInterpCx<'tcx>,
         id: AllocId,
@@ -964,10 +1027,16 @@ impl<'tcx> MiriMachine<'tcx> {
             ecx.emit_diagnostic(NonHaltingDiagnostic::TrackingAlloc(id, size, align));
         }
 
+        // With `-Zmiri-disable-harness-borrow-tracking`, allocations attributed to the test
+        // harness / language runtime get no borrow tracker state at all, so they are exempt
+        // from aliasing checks (and from the cost of maintaining that state).
+        let track_this_alloc =
+            ecx.machine.harness_borrow_tracking || !Self::alloc_in_harness(ecx, kind);
         let borrow_tracker = ecx
             .machine
             .borrow_tracker
             .as_ref()
+            .filter(|_| track_this_alloc)
             .map(|bt| bt.borrow_mut().new_allocation(id, size, kind, &ecx.machine));
 
         let data_race = match &ecx.machine.data_race {
@@ -1047,6 +1116,8 @@ impl VisitProvenance for MiriMachine<'_> {
             exported_symbols_cache: _,
             backtrace_style: _,
             user_relevant_crates: _,
+            harness_borrow_tracking: _,
+            harness_crates: _,
             rng: _,
             allocator: _,
             tracked_alloc_ids: _,
@@ -1761,6 +1832,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             catch_unwind: None,
             timing,
             user_relevance: ecx.machine.user_relevance(&frame),
+            in_harness: ecx.machine.frame_in_harness(&frame),
             data_race: ecx
                 .machine
                 .data_race
