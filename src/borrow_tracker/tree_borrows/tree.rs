@@ -1038,8 +1038,9 @@ impl<'tcx> LocationTree {
             let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
             old_state.skip_if_known_noop(access_kind, args.rel_pos)
         };
+        let mut visit_count: u32 = 0;
         let node_app = |args: NodeAppArgs<'_, LocationTree>| {
-            machine.visits_since_gc.set(machine.visits_since_gc.get().saturating_add(1));
+            visit_count += 1;
             let node = args.nodes.get_mut(args.idx).unwrap();
             let mut perm = args.data.perms.entry(args.idx);
 
@@ -1076,7 +1077,7 @@ impl<'tcx> LocationTree {
             ChildrenVisitMode::SkipChildrenOfAccessed =>
                 visitor.traverse_nonchildren(access_source, node_skipper, node_app),
         };
-        
+        machine.visits_since_gc.set(machine.visits_since_gc.get().saturating_add(visit_count));
         result.into()
     }
 
@@ -1113,6 +1114,7 @@ impl<'tcx> LocationTree {
 
         // Whether there is an exposed node in this tree that allows this access.
         let mut has_valid_exposed = false;
+        let mut visit_count: u32 = 0;
 
         // This does a traversal across the tree updating children before their parents. The
         // difference to `perform_normal_access` is that we take the access relatedness from
@@ -1149,7 +1151,7 @@ impl<'tcx> LocationTree {
                 }
             },
             |args| {
-                machine.visits_since_gc.set(machine.visits_since_gc.get().saturating_add(1));
+                visit_count += 1;
                 let node = args.nodes.get_mut(args.idx).unwrap();
 
                 let protected = global.borrow().protected_tags.contains_key(&node.tag);
@@ -1205,6 +1207,7 @@ impl<'tcx> LocationTree {
                 })
             },
         )?;
+        machine.visits_since_gc.set(machine.visits_since_gc.get().saturating_add(visit_count));
         // If there is no exposed node in this tree that allows this access, then the access *must*
         // be foreign to the entire subtree. Foreign accesses are only possible on wildcard subtrees
         // as there are no ancestors to the main root. So if we do not find a valid exposed node in
