@@ -733,10 +733,17 @@ impl<'tcx> Tree {
 
 /// Integration with the BorTag garbage collector
 impl Tree {
-    pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>, min_nodes: usize) {
+    /// Returns `(live, dead)`: the number of nodes remaining in the tree and the
+    /// number of nodes removed by this pass.
+    pub fn remove_unreachable_tags(
+        &mut self,
+        live_tags: &FxHashSet<BorTag>,
+        min_nodes: usize,
+    ) -> (usize, usize) {
+        let before = self.tag_mapping.len();
         // Only bother garbage collecting trees that are large enough
-        if self.tag_mapping.len() <= min_nodes {
-            return;
+        if before <= min_nodes {
+            return (before, 0);
         }
         for i in 0..(self.roots.len()) {
             self.remove_useless_children(self.roots[i], live_tags);
@@ -746,6 +753,8 @@ impl Tree {
         // tags (this does not necessarily mean that they have identical internal representations,
         // see the `PartialEq` impl for `UniValMap`)
         self.locations.merge_adjacent_thorough();
+        let after = self.tag_mapping.len();
+        (after, before - after)
     }
 
     /// Checks if a node is useless and should be GC'ed.
@@ -778,8 +787,11 @@ impl Tree {
             return node.children.iter().all(|&child_idx| {
                 let child = self.nodes.get(child_idx).unwrap();
                 self.locations.iter_all().all(|(_range, loc)| {
-                    let parent_perm =
-                        loc.perms.get(idx).map(|x| x.permission).unwrap_or(node.default_initial_perm);
+                    let parent_perm = loc
+                        .perms
+                        .get(idx)
+                        .map(|x| x.permission)
+                        .unwrap_or(node.default_initial_perm);
                     let child_perm = loc
                         .perms
                         .get(child_idx)
