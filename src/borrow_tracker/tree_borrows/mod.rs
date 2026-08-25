@@ -20,7 +20,6 @@ mod wildcard;
 
 #[cfg(feature = "lazy-alloc")]
 mod lazy_alloc;
-pub use self::lazy_alloc::LazyTree;
 use self::perms::Permission;
 pub use self::tree::Tree;
 
@@ -34,17 +33,9 @@ mod exhaustive;
 /// types expose the same methods, so callers never need to care which one this
 /// is.
 #[cfg(feature = "lazy-alloc")]
-pub type AllocState = LazyTree;
+pub type AllocState = lazy_alloc::LazyTree;
 #[cfg(not(feature = "lazy-alloc"))]
 pub type AllocState = Tree;
-
-#[cfg(not(feature = "lazy-alloc"))]
-impl Tree {
-    /// Counterpart to `LazyTree::ensure_init`. Without lazy allocation the tree
-    /// always exists, so there is nothing to do; this exists purely so callers
-    /// can stay `cfg`-free.
-    pub fn ensure_init(&mut self, _state: &mut GlobalStateInner, _machine: &MiriMachine<'_>) {}
-}
 
 impl<'tcx> Tree {
     /// Create a new allocation, i.e. a new tree
@@ -448,10 +439,14 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         }
 
-        // Record the parent-child pair in the tree. This is the point where a
-        // lazily-allocated tree has to exist, so make sure it does.
-        let global = this.machine.borrow_tracker.as_ref().unwrap();
-        tree_borrows.ensure_init(&mut global.borrow_mut(), &this.machine);
+        // Initialize the tree if it hasn't been initialized yet.
+        #[cfg(feature = "lazy-alloc")]
+        tree_borrows.ensure_init(
+            &mut this.machine.borrow_tracker.as_ref().unwrap().borrow_mut(),
+            &this.machine,
+        );
+
+        // Record the parent-child pair in the tree.
         tree_borrows.new_child(
             base_offset,
             parent_prov,

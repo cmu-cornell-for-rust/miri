@@ -1,15 +1,12 @@
 //! Lazy allocation of Tree Borrows trees, gated behind the `lazy-alloc` feature.
 //!
 //! Most allocations are never accessed through a pointer that Tree Borrows
-//! tracks, so building a [`Tree`] for every allocation is wasted work. With
-//! this feature enabled, the tree is only materialized once something actually
-//! needs it.
+//! tracks, remaining as singleton nodes, so building a [`Tree`] for every 
+//! allocation is wasted work. With this feature enabled, the tree is only
+//! initialized once the first child node is created.
 //!
-//! [`LazyTree`] mirrors the method surface of [`Tree`] exactly, so
-//! `tree_borrows::AllocState` can alias either type and every caller stays
-//! `cfg`-free. Each method here is a thin wrapper that forwards to the
-//! corresponding [`Tree`] method once the tree exists — the actual Tree Borrows
-//! logic lives in `super` and `super::tree`, never here.
+//! Each method here is a thin wrapper that forwards to the
+//! corresponding [`Tree`] method once the tree exists.
 
 use std::cell::Cell;
 
@@ -28,8 +25,7 @@ use crate::*;
 #[derive(Debug, Clone)]
 pub enum LazyTree {
     /// The tree does not exist yet. We keep everything needed to build it, plus
-    /// `exposed`, which records that `expose_tag` was called before the tree
-    /// existed so that [`LazyTree::ensure_init`] can replay it.
+    /// `exposed`, which records if `expose_tag` was called before the tree was built.
     Uninit {
         id: AllocId,
         size: Size,
@@ -42,14 +38,11 @@ pub enum LazyTree {
 impl LazyTree {
     /// Materialize the tree if it does not exist yet.
     ///
-    /// Callers that need a real tree (currently only `new_child`) must call
-    /// this first. It is a no-op once the tree exists.
+    /// Called during `new_child`. It is a no-op once the tree exists.
     pub fn ensure_init(&mut self, state: &mut GlobalStateInner, machine: &MiriMachine<'_>) {
         if let LazyTree::Uninit { id, size, span, exposed } = self {
             let tag = state.root_ptr_tag(*id, machine);
             let mut tree = Tree::new(tag, *size, *span);
-            // Replay an exposure that arrived while we were still uninitialized,
-            // so that wildcard pointers keep working across lazy initialization.
             if *exposed {
                 tree.expose_tag(tag, false);
             }
@@ -68,8 +61,7 @@ impl LazyTree {
 
 /// Wrappers for the `Tree` methods in `super`.
 impl<'tcx> LazyTree {
-    /// Create a new allocation. Unlike `Tree::new_allocation` this does not
-    /// build anything yet; we only remember what the tree would be made of.
+    /// Create a new dummy allocation.
     pub fn new_allocation(
         id: AllocId,
         size: Size,
@@ -91,8 +83,6 @@ impl<'tcx> LazyTree {
     ) -> InterpResult<'tcx> {
         match self.get_mut() {
             Some(tree) => tree.before_memory_access(access_kind, alloc_id, prov, range, machine),
-            // Without a tree there is no tag that could have been invalidated,
-            // so every access is trivially allowed.
             None => interp_ok(()),
         }
     }
@@ -121,7 +111,6 @@ impl<'tcx> LazyTree {
     ) -> InterpResult<'tcx> {
         match self.get_mut() {
             Some(tree) => tree.release_protector(machine, global, tag, alloc_id),
-            // A tag can only be protected in a tree that exists.
             None => interp_ok(()),
         }
     }
