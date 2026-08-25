@@ -1,5 +1,6 @@
 //@ignore-target: windows # No libc socket on Windows
 //@compile-flags: -Zmiri-disable-isolation
+//@run-native
 
 #[path = "../../utils/libc.rs"]
 mod libc_utils;
@@ -58,6 +59,8 @@ fn main() {
 
     test_sockopt_sndtimeo();
     test_sockopt_rcvtimeo();
+
+    test_unblock_after_socket_close();
 }
 
 /// Test creating a socket and then closing it afterwards.
@@ -176,8 +179,8 @@ fn test_set_nosigpipe_invalid_len() {
     let sockfd =
         unsafe { errno_result(libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0)).unwrap() };
     // Value should be of type `libc::c_int` which has size 4 bytes.
-    // By providing a u64 of size 8 bytes we trigger an invalid length error.
-    let err = net::setsockopt(sockfd, libc::SOL_SOCKET, libc::SO_NOSIGPIPE, 1u64).unwrap_err();
+    // By providing a u16 of size 2 bytes we trigger an invalid length error.
+    let err = net::setsockopt(sockfd, libc::SOL_SOCKET, libc::SO_NOSIGPIPE, 1u16).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::InvalidInput);
     // Check that it is the right kind of `InvalidInput`.
     assert_eq!(err.raw_os_error(), Some(libc::EINVAL));
@@ -852,7 +855,7 @@ fn test_sockopt_sndtimeo() {
             Err(err) if err.kind() == ErrorKind::WouldBlock => {
                 // The last write should return an EAGAIN/EWOULDBLOCK after ~40ms instead
                 // of blocking indefinitely.
-                assert!(Instant::now().duration_since(before) >= Duration::from_millis(40));
+                assert!(before.elapsed() >= Duration::from_millis(40));
                 break;
             }
             Err(err) => panic!("unexpected error whilst filling up buffer: {err}"),
@@ -898,5 +901,42 @@ fn test_sockopt_rcvtimeo() {
     };
     assert_eq!(err.kind(), ErrorKind::WouldBlock);
     // Ensure that we blocked for at least 40 milliseconds.
-    assert!(Instant::now().duration_since(before) >= Duration::from_millis(40))
+    assert!(before.elapsed() >= Duration::from_millis(40))
+}
+
+/// Test that a thread which is blocked on a socket gets unblocked once
+/// the operation is finished, even when the socket file _descriptor_ gets
+/// closed in the mean time.
+fn test_unblock_after_socket_close() {
+    // MacOS behaves different (`read` errors with EBADF when the file description is closed)
+    // so we skip the test when we are run on a native macOS target.
+    if cfg!(not(miri)) && cfg!(target_os = "macos") {
+        return;
+    }
+
+    let (server_sockfd, addr) = net::make_listener_ipv4().unwrap();
+    let client_sockfd =
+        unsafe { errno_result(libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0)).unwrap() };
+
+    net::connect_ipv4(client_sockfd, addr).unwrap();
+    let (peerfd, _) = net::accept_ipv4(server_sockfd).unwrap();
+
+    // Spawn server thread.
+    let server_thread = thread::spawn(move || {
+        // Ensure main thread is blocked on reading from
+        // the client socket.
+        thread::sleep(Duration::from_millis(10));
+
+        unsafe { errno_check(libc::close(client_sockfd)) };
+
+        // Writing data into the peer socket should unblock
+        // the main thread.
+        libc_utils::write_all(peerfd, TEST_BYTES).unwrap();
+    });
+
+    let mut buffer = [0u8; TEST_BYTES.len()];
+    libc_utils::read_exact(client_sockfd, &mut buffer).unwrap();
+    assert_eq!(&buffer, TEST_BYTES);
+
+    server_thread.join().unwrap();
 }

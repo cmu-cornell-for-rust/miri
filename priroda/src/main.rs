@@ -1,25 +1,26 @@
 #![feature(rustc_private)]
 
-extern crate miri;
-extern crate rustc_codegen_ssa;
-extern crate rustc_data_structures;
+extern crate rustc_abi;
 extern crate rustc_driver;
 extern crate rustc_hir;
-extern crate rustc_hir_analysis;
 extern crate rustc_interface;
-extern crate rustc_log;
 extern crate rustc_middle;
 extern crate rustc_session;
+extern crate rustc_span;
+extern crate rustc_structures;
 
-use std::io::{self, Write};
+mod debugger;
+mod frontend;
 
+use debugger::PrirodaContext;
 use miri::*;
 use rustc_driver::Compilation;
-use rustc_hir::attrs::CrateType;
 use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::EarlyDiagCtxt;
 use rustc_session::config::ErrorOutputType;
+use rustc_structures::CrateType;
+
 fn find_sysroot() -> String {
     std::env::var("MIRI_SYSROOT")
         .expect("set MIRI_SYSROOT to the path from `cargo miri setup --print-sysroot`")
@@ -30,6 +31,7 @@ fn main() {
     rustc_driver::init_rustc_env_logger(&early_dcx);
 
     let mut args: Vec<String> = std::env::args().collect();
+    let frontend = Frontend::parse_from_args(&mut args);
 
     args.splice(1..1, miri::MIRI_DEFAULT_ARGS.iter().map(ToString::to_string));
 
@@ -38,15 +40,81 @@ fn main() {
         args.push(sysroot_flag);
         args.push(find_sysroot());
     }
-    //TODO: handle the same `-Z` flags that Miri accepts.
-    rustc_driver::run_compiler(&args, &mut PrirodaCompilerCalls::new());
+    // FIXME: handle the same `-Z` flags that Miri accepts.
+    rustc_driver::run_compiler(&args, &mut PrirodaCompilerCalls::new(frontend));
 }
 
-struct PrirodaCompilerCalls;
+/// Frontend selected by Priroda-specific CLI flags.
+#[derive(Clone, Copy)]
+enum Frontend {
+    Cli,
+    Dap { port: Option<u16> },
+}
+
+impl Frontend {
+    /// Remove Priroda-only flags before forwarding the remaining arguments to rustc.
+    fn parse_from_args(args: &mut Vec<String>) -> Self {
+        let mut frontend = Frontend::Cli;
+        let mut rustc_args = Vec::with_capacity(args.len());
+        let mut parsing_priroda_args = true;
+
+        let mut arg_iter = std::mem::take(args).into_iter();
+        if let Some(program) = arg_iter.next() {
+            rustc_args.push(program);
+        }
+
+        while let Some(arg) = arg_iter.next() {
+            if parsing_priroda_args {
+                if arg == "--dap" {
+                    if matches!(frontend, Frontend::Cli) {
+                        frontend = Frontend::Dap { port: None };
+                    }
+                    continue;
+                }
+
+                if arg == "--port" {
+                    let port_str = arg_iter
+                        .next()
+                        .unwrap_or_else(|| Self::fatal_arg_error("--port requires a value"));
+                    frontend = Frontend::Dap { port: Some(Self::parse_port(&port_str)) };
+                    continue;
+                }
+
+                if let Some(port_str) = arg.strip_prefix("--port=") {
+                    frontend = Frontend::Dap { port: Some(Self::parse_port(port_str)) };
+                    continue;
+                }
+
+                if arg == "--" {
+                    parsing_priroda_args = false;
+                }
+            }
+
+            rustc_args.push(arg);
+        }
+
+        *args = rustc_args;
+        frontend
+    }
+
+    fn parse_port(port: &str) -> u16 {
+        port.parse()
+            .unwrap_or_else(|_| Self::fatal_arg_error("--port requires a valid u16 port number"))
+    }
+
+    fn fatal_arg_error(message: &str) -> ! {
+        eprintln!("priroda: {message}");
+        std::process::exit(1);
+    }
+}
+
+struct PrirodaCompilerCalls {
+    frontend: Frontend,
+}
 
 impl PrirodaCompilerCalls {
-    fn new() -> Self {
-        Self
+    fn new(frontend: Frontend) -> Self {
+        Self { frontend }
     }
 }
 
@@ -56,23 +124,23 @@ impl rustc_driver::Callbacks for PrirodaCompilerCalls {
         tcx.dcx().abort_if_errors();
 
         if !tcx.crate_types().contains(&CrateType::Executable) {
-            //TODO: support non-bin crates by listing functions and letting users call them with manually entered arguments.
+            // FIXME: support non-bin crates by listing functions and letting users call them with manually entered arguments.
             tcx.dcx().fatal("priroda only makes sense on bin crates");
         }
 
         let ecx = create_ecx(tcx);
 
         let mut session = PrirodaContext::new(ecx);
-        let result = run_cli_loop(&mut session);
+        let result = match self.frontend {
+            Frontend::Cli => frontend::Cli {}.run_cli_loop(&mut session),
+            Frontend::Dap { port } => frontend::Dap { port }.run_dap_loop(&mut session),
+        };
 
         match result.report_err() {
             Ok(()) => {}
             Err(err) =>
                 if let Some((return_code, _leak_check)) = report_result(&session.ecx, err) {
-                    //TODO: print the evaluated program's exit code and return to the debugger prompt instead of exiting Priroda.
-                    if return_code != 0 {
-                        std::process::exit(return_code);
-                    }
+                    std::process::exit(return_code);
                 },
         }
 
@@ -82,66 +150,9 @@ impl rustc_driver::Callbacks for PrirodaCompilerCalls {
 
 fn create_ecx<'tcx>(tcx: TyCtxt<'tcx>) -> MiriInterpCx<'tcx> {
     let (entry_id, entry_type) = miri::entry_fn(tcx);
+    // FIXME: share Miri launcher configuration so interpreted programs receive
+    // their program name, arguments, environment snapshot, and `MIRI_CWD`.
     let config = MiriConfig::default();
+    // FIXME: report interpreter initialization failures instead of panicking.
     miri::create_ecx(tcx, entry_id, entry_type, &config, None).unwrap()
-}
-
-pub struct PrirodaContext<'tcx> {
-    ecx: MiriInterpCx<'tcx>,
-}
-
-impl<'tcx> PrirodaContext<'tcx> {
-    fn new(ecx: MiriInterpCx<'tcx>) -> Self {
-        Self { ecx }
-    }
-
-    // TODO: return a StepResult enum once we distinguish breakpoint stops,
-    // program exit, and other debugger states.
-    pub fn step(&mut self) -> InterpResult<'tcx> {
-        self.ecx.miri_step()
-    }
-
-    pub fn print_location(&self) {
-        let span = self.ecx.machine.current_user_relevant_span();
-        let location = self.ecx.tcx.sess.source_map().span_to_diagnostic_string(span);
-        // TODO: skip noisy std/runtime spans and avoid printing `no-location`
-        // once the basic command loop is solid.
-        println!("{location}");
-        io::stdout().flush().unwrap();
-    }
-    fn run_command(&mut self, command: SessionCommand) -> InterpResult<'tcx> {
-        match command {
-            SessionCommand::Step => self.step(),
-        }
-    }
-}
-
-enum SessionCommand {
-    Step,
-}
-
-fn parse_command(input: &str) -> Option<SessionCommand> {
-    match input.trim() {
-        "" | "s" | "step" => Some(SessionCommand::Step),
-        _ => None,
-    }
-}
-
-fn run_cli_loop<'tcx>(session: &mut PrirodaContext<'tcx>) -> InterpResult<'tcx> {
-    loop {
-        print!("(priroda) ");
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        // TODO: handle EOF explicitly so scripted input can stop the CLI instead
-        // of being treated like an empty Enter step.
-        io::stdin().read_line(&mut input).unwrap();
-
-        if let Some(command) = parse_command(&input) {
-            session.run_command(command)?;
-            session.print_location();
-        } else {
-            println!("no command");
-        }
-    }
 }
