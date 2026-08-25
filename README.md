@@ -501,7 +501,7 @@ to Miri failing to detect cases of undefined behavior in a program.
   The default is to search for and remove unreachable provenance once every `10000` basic blocks. Setting
   this to `0` disables the garbage collector, which causes some programs to have explosive memory
   usage and/or super-linear runtime.
-* `-Zmiri-visit-gc=<visits>` sets the initial interval (in visited tree nodes) of the provenance
+* `-Zmiri-tree-gc-visits=<visits>` sets the initial interval (in visited tree nodes) of the provenance
   garbage collector under Tree Borrows. The default is `25000`. After each pass the interval is
   recalculated from the fraction of dead nodes the pass found, so this only sets the starting
   point. Setting this to `0` disables the visit-based garbage collector.

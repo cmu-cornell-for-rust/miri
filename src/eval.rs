@@ -151,7 +151,7 @@ pub struct MiriConfig {
     /// Run a garbage collector for BorTags every N basic blocks.
     pub gc_interval: u32,
     /// Run a garbage collector for TreeBorrows every N visited nodes.
-    pub visit_gc_interval: u32,
+    pub tree_gc_visit_interval: u32,
     /// Lower bound for the adaptive TreeBorrows GC interval (in visited nodes).
     pub tree_gc_min_interval: u32,
     /// Upper bound for the adaptive TreeBorrows GC interval (in visited nodes).
@@ -213,7 +213,7 @@ impl Default for MiriConfig {
             native_lib: vec![],
             native_lib_enable_tracing: false,
             gc_interval: 10_000,
-            visit_gc_interval: 25_000,
+            tree_gc_visit_interval: 25_000,
             tree_gc_min_interval: 1_000,
             tree_gc_max_interval: 100_000,
             tree_gc_target_dead_ratio: 0.25,

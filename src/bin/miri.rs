@@ -622,11 +622,11 @@ fn main() -> ExitCode {
                 fatal_error!("-Zmiri-provenance-gc requires a `u32`: {}", err)
             });
             miri_config.gc_interval = interval;
-        } else if let Some(param) = arg.strip_prefix("-Zmiri-visit-gc=") {
+        } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-visits=") {
             let interval = param
                 .parse::<u32>()
-                .unwrap_or_else(|err| fatal_error!("-Zmiri-visit-gc requires a `u32`: {}", err));
-            miri_config.visit_gc_interval = interval;
+                .unwrap_or_else(|err| fatal_error!("-Zmiri-tree-gc-visits requires a `u32`: {}", err));
+            miri_config.tree_gc_visit_interval = interval;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-min-interval=") {
             let interval = param.parse::<u32>().unwrap_or_else(|err| {
                 fatal_error!("-Zmiri-tree-gc-min-interval requires a `u32`: {}", err)

@@ -629,14 +629,14 @@ pub struct MiriMachine<'tcx> {
     /// Recalculated after every GC pass based on the fraction of dead nodes found,
     /// clamped to `[tree_gc_min_interval, tree_gc_max_interval]`; the configured
     /// value only sets the starting point (0 disables the visit-based GC entirely).
-    pub(crate) visit_gc_interval: u32,
+    pub(crate) tree_gc_visit_interval: u32,
     /// Number of nodes visited since the last GC pass.
     pub(crate) visits_since_gc: Cell<u32>,
-    /// Lower bound for the adaptive `visit_gc_interval`.
+    /// Lower bound for the adaptive `tree_gc_visit_interval`.
     pub(crate) tree_gc_min_interval: u32,
-    /// Upper bound for the adaptive `visit_gc_interval`.
+    /// Upper bound for the adaptive `tree_gc_visit_interval`.
     pub(crate) tree_gc_max_interval: u32,
-    /// The dead-node fraction a GC pass should find for `visit_gc_interval` to be
+    /// The dead-node fraction a GC pass should find for `tree_gc_visit_interval` to be
     /// considered well-tuned; the interval adapts toward this target.
     pub(crate) tree_gc_target_dead_ratio: f64,
     /// Only garbage collect TreeBorrows trees that have more than this many nodes.
@@ -842,7 +842,7 @@ impl<'tcx> MiriMachine<'tcx> {
             }).collect(),
             gc_interval: config.gc_interval,
             since_gc: 0,
-            visit_gc_interval: config.visit_gc_interval,
+            tree_gc_visit_interval: config.tree_gc_visit_interval,
             visits_since_gc: Cell::new(0),
             tree_gc_min_interval: config.tree_gc_min_interval,
             tree_gc_max_interval: config.tree_gc_max_interval,
@@ -1078,7 +1078,7 @@ impl VisitProvenance for MiriMachine<'_> {
             native_lib_ecx_interchange: _,
             gc_interval: _,
             since_gc: _,
-            visit_gc_interval: _,
+            tree_gc_visit_interval: _,
             visits_since_gc: _,
             tree_gc_min_interval: _,
             tree_gc_max_interval: _,
@@ -1954,8 +1954,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         let gc_cond = if let Some(borrow_tracker) = &ecx.machine.borrow_tracker {
             match borrow_tracker.borrow().borrow_tracker_method() {
                 crate::borrow_tracker::BorrowTrackerMethod::TreeBorrows(_) =>
-                    ecx.machine.visit_gc_interval > 0
-                        && ecx.machine.visits_since_gc.get() >= ecx.machine.visit_gc_interval,
+                    ecx.machine.tree_gc_visit_interval > 0
+                        && ecx.machine.visits_since_gc.get() >= ecx.machine.tree_gc_visit_interval,
                 crate::borrow_tracker::BorrowTrackerMethod::StackedBorrows =>
                     ecx.machine.gc_interval > 0 && ecx.machine.since_gc >= ecx.machine.gc_interval,
             }
