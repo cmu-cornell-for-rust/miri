@@ -623,9 +623,9 @@ fn main() -> ExitCode {
             });
             miri_config.gc_interval = interval;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-visits=") {
-            let interval = param
-                .parse::<u32>()
-                .unwrap_or_else(|err| fatal_error!("-Zmiri-tree-gc-visits requires a `u32`: {}", err));
+            let interval = param.parse::<u32>().unwrap_or_else(|err| {
+                fatal_error!("-Zmiri-tree-gc-visits requires a `u32`: {}", err)
+            });
             miri_config.tree_gc_visit_interval = interval;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-min-interval=") {
             let interval = param.parse::<u32>().unwrap_or_else(|err| {
@@ -650,6 +650,11 @@ fn main() -> ExitCode {
                 fatal_error!("-Zmiri-tree-gc-min-nodes requires a `usize`: {}", err)
             });
             miri_config.tree_gc_min_nodes = min_nodes;
+        } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-multi-child-compact=") {
+            let max = param.parse::<usize>().unwrap_or_else(|err| {
+                fatal_error!("-Zmiri-tree-gc-multi-child-compact requires a `usize`: {}", err)
+            });
+            miri_config.tree_gc_max_compact = max;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-measureme=") {
             miri_config.measureme_out = Some(param.to_string());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-backtrace=") {

@@ -161,6 +161,9 @@ pub struct MiriConfig {
     pub tree_gc_target_dead_ratio: f64,
     /// Only garbage collect TreeBorrows trees that have more than this many nodes.
     pub tree_gc_min_nodes: usize,
+    /// Upper bound on how many children compaction may give a node when splicing out a
+    /// dead node with several children. `0` disables multi-child compaction.
+    pub tree_gc_max_compact: usize,
     /// The number of CPUs to be reported by miri.
     pub num_cpus: u32,
     /// Requires Miri to emulate pages of a certain size.
@@ -218,6 +221,7 @@ impl Default for MiriConfig {
             tree_gc_max_interval: 100_000,
             tree_gc_target_dead_ratio: 0.25,
             tree_gc_min_nodes: 64,
+            tree_gc_max_compact: 16,
             num_cpus: 1,
             page_size: None,
             collect_leak_backtraces: true,

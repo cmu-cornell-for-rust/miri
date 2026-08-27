@@ -248,6 +248,7 @@ fn remove_unreachable_tags<'tcx>(
     // Avoid iterating all allocations if there's no borrow tracker anyway.
     if ecx.machine.borrow_tracker.is_some() {
         let tree_gc_min_nodes = ecx.machine.tree_gc_min_nodes;
+        let max_compact = ecx.machine.tree_gc_max_compact;
         ecx.memory.alloc_map().iter(|it| {
             for (_id, (_kind, alloc)) in it {
                 let (live, dead) = alloc
@@ -255,7 +256,7 @@ fn remove_unreachable_tags<'tcx>(
                     .borrow_tracker
                     .as_ref()
                     .unwrap()
-                    .remove_unreachable_tags(&tags, tree_gc_min_nodes);
+                    .remove_unreachable_tags(&tags, tree_gc_min_nodes, max_compact);
                 live_nodes += live;
                 dead_nodes += dead;
             }

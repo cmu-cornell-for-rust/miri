@@ -641,6 +641,9 @@ pub struct MiriMachine<'tcx> {
     pub(crate) tree_gc_target_dead_ratio: f64,
     /// Only garbage collect TreeBorrows trees that have more than this many nodes.
     pub(crate) tree_gc_min_nodes: usize,
+    /// Upper bound on how many children compaction may give a node when splicing out a
+    /// dead node with several children. `0` or `1` disables multi-child compaction.
+    pub(crate) tree_gc_max_compact: usize,
 
     /// The number of CPUs to be reported by miri.
     pub(crate) num_cpus: u32,
@@ -848,6 +851,7 @@ impl<'tcx> MiriMachine<'tcx> {
             tree_gc_max_interval: config.tree_gc_max_interval,
             tree_gc_target_dead_ratio: config.tree_gc_target_dead_ratio,
             tree_gc_min_nodes: config.tree_gc_min_nodes,
+            tree_gc_max_compact: config.tree_gc_max_compact,
             num_cpus: config.num_cpus,
             page_size,
             stack_addr,
@@ -1084,6 +1088,7 @@ impl VisitProvenance for MiriMachine<'_> {
             tree_gc_max_interval: _,
             tree_gc_target_dead_ratio: _,
             tree_gc_min_nodes: _,
+            tree_gc_max_compact: _,
             num_cpus: _,
             page_size: _,
             stack_addr: _,

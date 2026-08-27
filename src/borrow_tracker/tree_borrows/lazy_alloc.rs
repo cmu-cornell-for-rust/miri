@@ -1,7 +1,7 @@
 //! Lazy allocation of Tree Borrows trees, gated behind the `lazy-alloc` feature.
 //!
 //! Most allocations are never accessed through a pointer that Tree Borrows
-//! tracks, remaining as singleton nodes, so building a [`Tree`] for every 
+//! tracks, remaining as singleton nodes, so building a [`Tree`] for every
 //! allocation is wasted work. With this feature enabled, the tree is only
 //! initialized once the first child node is created.
 //!
@@ -177,9 +177,11 @@ impl<'tcx> LazyTree {
         &mut self,
         live_tags: &FxHashSet<BorTag>,
         min_nodes: usize,
+        max_compact: usize,
     ) -> (usize, usize) {
         match self.get_mut() {
-            Some(tree) => tree.remove_unreachable_tags(live_tags, min_nodes),
+            Some(tree) =>
+                tree.remove_unreachable_tags(live_tags, min_nodes, max_compact),
             None => (0, 0),
         }
     }

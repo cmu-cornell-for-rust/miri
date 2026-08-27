@@ -511,6 +511,12 @@ to Miri failing to detect cases of undefined behavior in a program.
   pass should find for the interval to be considered well-tuned; passes finding more garbage than
   this shrink the interval and passes finding less grow it. Must be in `(0.0, 1.0]`; the default
   is `0.25`.
+* `-Zmiri-tree-gc-multi-child-compact=<max>` bounds how wide Tree Borrows compaction may make a
+  node. When the GC splices out a dead node that has several children, those children are
+  reparented onto its parent; this is refused if it would leave the parent with more than `max`
+  children. The default is `16`. Setting this to `0` or `1` disables multi-child compaction entirely,
+  leaving dead nodes with more than one child in place (dead leaves and dead nodes with exactly
+  one child are still removed).
 * `-Zmiri-track-alloc-accesses` show not only allocation and free events for tracked allocations,
   but also reads and writes.
 * `-Zmiri-track-alloc-id=<id1>,<id2>,...` shows a backtrace when the given allocations are
