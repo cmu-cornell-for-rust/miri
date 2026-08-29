@@ -282,10 +282,17 @@ fn remove_unreachable_allocs<'tcx>(ecx: &mut MiriInterpCx<'tcx>, allocs: FxHashS
 /// shrink the interval (collect sooner); passes finding less grow it.
 /// The adjustment is damped to at most 2x per pass in either direction, and the
 /// resulting interval is clamped to `[tree_gc_min_interval, tree_gc_max_interval]`.
+///
+/// A `tree_gc_target_dead_ratio` of `0` disables the adaptation, pinning the interval
+/// to its configured value.
 fn update_tree_gc_interval<'tcx>(ecx: &mut MiriInterpCx<'tcx>, live: usize, dead: usize) {
     let total = live + dead;
-    // `tree_gc_visit_interval == 0` means the visit-based GC is disabled; respect that.
-    if total == 0 || ecx.machine.tree_gc_visit_interval == 0 {
+    // `tree_gc_visit_interval == 0` means the visit-based GC is disabled, and a target dead
+    // ratio of `0` means the interval is fixed; respect both.
+    if total == 0
+        || ecx.machine.tree_gc_visit_interval == 0
+        || ecx.machine.tree_gc_target_dead_ratio == 0.0
+    {
         return;
     }
     #[allow(clippy::as_conversions)]

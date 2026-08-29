@@ -509,8 +509,9 @@ to Miri failing to detect cases of undefined behavior in a program.
   adaptive Tree Borrows GC interval. The defaults are `1000` and `100000`.
 * `-Zmiri-tree-gc-target-dead-ratio=<ratio>` sets the fraction of dead nodes a Tree Borrows GC
   pass should find for the interval to be considered well-tuned; passes finding more garbage than
-  this shrink the interval and passes finding less grow it. Must be in `(0.0, 1.0]`; the default
-  is `0.25`.
+  this shrink the interval and passes finding less grow it. Must be in `[0.0, 1.0]`; the default
+  is `0.25`. Setting this to `0` disables the adaptation, fixing the interval at the
+  `-Zmiri-tree-gc-visits` value.
 * `-Zmiri-tree-gc-multi-child-compact=<max>` bounds how wide Tree Borrows compaction may make a
   node. When the GC splices out a dead node that has several children, those children are
   reparented onto its parent; this is refused if it would leave the parent with more than `max`

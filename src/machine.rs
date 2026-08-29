@@ -637,7 +637,8 @@ pub struct MiriMachine<'tcx> {
     /// Upper bound for the adaptive `tree_gc_visit_interval`.
     pub(crate) tree_gc_max_interval: u32,
     /// The dead-node fraction a GC pass should find for `tree_gc_visit_interval` to be
-    /// considered well-tuned; the interval adapts toward this target.
+    /// considered well-tuned; the interval adapts toward this target. `0` disables the
+    /// adaptation, pinning `tree_gc_visit_interval` to its configured value.
     pub(crate) tree_gc_target_dead_ratio: f64,
     /// Only garbage collect TreeBorrows trees that have more than this many nodes.
     pub(crate) tree_gc_min_nodes: usize,

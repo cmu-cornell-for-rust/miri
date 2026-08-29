@@ -641,8 +641,8 @@ fn main() -> ExitCode {
             let ratio = param.parse::<f64>().unwrap_or_else(|err| {
                 fatal_error!("-Zmiri-tree-gc-target-dead-ratio requires an `f64`: {}", err)
             });
-            if !(ratio > 0.0 && ratio <= 1.0) {
-                fatal_error!("-Zmiri-tree-gc-target-dead-ratio must be in (0.0, 1.0]");
+            if !(ratio >= 0.0 && ratio <= 1.0) {
+                fatal_error!("-Zmiri-tree-gc-target-dead-ratio must be in [0.0, 1.0]");
             }
             miri_config.tree_gc_target_dead_ratio = ratio;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-min-nodes=") {

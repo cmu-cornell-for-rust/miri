@@ -753,7 +753,7 @@ impl Tree {
         // that only drops dead leaves and splices single children.
         if max_compact <= 1 {
             for i in 0..(self.roots.len()) {
-                self.remove_useless_child(self.roots[i], live_tags);
+                self.remove_useless_single_children(self.roots[i], live_tags);
             }
         } else {
             for i in 0..(self.roots.len()) {
@@ -820,15 +820,7 @@ impl Tree {
     /// Checks whether a node can be spliced out of the tree, reparenting all of its
     /// children directly onto its own parent. This is sound exactly when, on every
     /// location, `can_be_replaced_by_child` holds between the node's permission and
-    /// the permission of *each* of its children: the simulation argument applies to
-    /// each child subtree independently, since removing the (dead) node does not
-    /// change the access-relatedness of anything outside of it.
-    ///
-    /// `parent_width` is the number of children the parent will have if `idx` is *kept*;
-    /// splicing `idx` out replaces it with its own children, so the parent ends up with
-    /// `parent_width - 1 + idx.children.len()`. We refuse to do so if that exceeds
-    /// `max_compact`, which bounds how wide compaction is allowed to make a
-    /// node. A bound of `0` disables multi-child compaction entirely.
+    /// the permission of *each* of its children.
     fn can_be_replaced_by_children(
         &self,
         idx: UniIndex,
@@ -841,25 +833,16 @@ impl Tree {
         // Ordered cheapest-first: a pointer check, then arithmetic, and only then the
         // hash lookup into `live`, so common rejections never pay for the hash.
 
-        // We never want to replace the root node, as it is also kept in `root_ptr_tags`.
-        if node.parent.is_none() {
-            return false;
-        }
-
-        // Refuse to make the parent wider than the configured bound.
-        if parent_width + node.children.len() - 1 > max_compact {
-            return false;
-        }
-
-        // Live nodes are still reachable and must stay.
-        if live.contains(&node.tag) {
+        // Additionally check that the resulting parent fits within the `max_compact` limit.
+        if node.parent.is_none()
+            || live.contains(&node.tag)
+            || parent_width + node.children.len() - 1 > max_compact
+        {
             return false;
         }
 
         // With several children, each sees the others' accesses as foreign, so the stricter
-        // `can_be_replaced_by_children` applies. Cache each child's index and fallback permission
-        // once, and iterate locations on the outside, so we look up neither the child node nor the
-        // parent's permission once per (child, location).
+        // `can_be_replaced_by_children` applies.
         let children: SmallVec<[(UniIndex, Permission); 4]> = node
             .children
             .iter()
@@ -908,7 +891,7 @@ impl Tree {
     /// `child: Reserved`. This tree can exist. If we blindly delete `parent` and reassign
     /// `child` to be a direct child of `root` then Writes to `child` are now permitted
     /// whereas they were not when `parent` was still there.
-    fn remove_useless_child(&mut self, root: UniIndex, live: &FxHashSet<BorTag>) {
+    fn remove_useless_single_children(&mut self, root: UniIndex, live: &FxHashSet<BorTag>) {
         // To avoid stack overflows, we roll our own stack.
         // Each element in the stack consists of the current tag, and the number of the
         // next child to be processed.
@@ -966,39 +949,23 @@ impl Tree {
         }
     }
 
-    /// Traverses the entire tree looking for useless tags.
-    /// Removes from the tree all useless child nodes of root.
-    /// It will not delete the root itself.
+    /// Alternative to `remove_useless_single_children` that also splices out nodes with multiple children,
+    /// as long as the resulting parent does not exceed `max_compact` children.
     fn remove_useless_children(
         &mut self,
         root: UniIndex,
         live: &FxHashSet<BorTag>,
         max_compact: usize,
     ) {
-        // To avoid stack overflows, we roll our own stack.
-        // Each element in the stack consists of the current tag, and the number of the
-        // next child to be processed.
-
-        // The other functions are written using the `TreeVisitorStack`, but that does not work here
-        // since we need to 1) do a post-traversal and 2) remove nodes from the tree.
-        // Since we do a post-traversal (by deleting nodes only after handling all children),
-        // we also need to be a bit smarter than "pop node, push all children."
         let mut stack = vec![(root, 0)];
         while let Some((tag, nth_child)) = stack.last_mut() {
             let node = self.nodes.get(*tag).unwrap();
             if *nth_child < node.children.len() {
-                // Visit the child by pushing it to the stack.
-                // Also increase `nth_child` so that when we come back to the `tag` node, we
-                // look at the next child.
                 let next_child = node.children[*nth_child];
                 *nth_child += 1;
                 stack.push((next_child, 0));
                 continue;
             } else {
-                // We have processed all children of `node`, so now it is time to process `node` itself.
-                // First, get the current children of `node`. To appease the borrow checker,
-                // we have to temporarily move the list out of the node, and then put the
-                // list of remaining children back in.
                 let old_children = mem::take(&mut self.nodes.get_mut(*tag).unwrap().children);
                 let mut new_children = SmallVec::<[UniIndex; 4]>::with_capacity(old_children.len());
                 for (i, idx) in old_children.iter().copied().enumerate() {
@@ -1008,8 +975,7 @@ impl Tree {
                         (node.children.len(), node.tag)
                     };
                     match num_children {
-                        // A leaf. Having no children is established by the match,
-                        // so liveness is all that is left to check.
+                        // Node is a leaf.
                         0 =>
                             if live.contains(&tag_of_idx) {
                                 new_children.push(idx);
@@ -1027,9 +993,8 @@ impl Tree {
                                 }
                                 None => new_children.push(idx),
                             },
-                        // Splice out the in-between node `idx`: its children (our grandchildren)
-                        // all become our direct children. They have already been processed, so
-                        // they need no further compacting.
+                        // Node has more than one child. If every child can soundly replace it, compact it
+                        // by reparenting all of its children onto its parent.
                         _ if self.can_be_replaced_by_children(
                             idx,
                             live,

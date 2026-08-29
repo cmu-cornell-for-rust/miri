@@ -158,6 +158,7 @@ pub struct MiriConfig {
     pub tree_gc_max_interval: u32,
     /// The fraction of dead nodes a TreeBorrows GC pass should find for the current
     /// interval to be considered well-tuned; the interval adapts toward this target.
+    /// `0` disables the adaptation, pinning the interval to `tree_gc_visit_interval`.
     pub tree_gc_target_dead_ratio: f64,
     /// Only garbage collect TreeBorrows trees that have more than this many nodes.
     pub tree_gc_min_nodes: usize,
