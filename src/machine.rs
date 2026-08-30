@@ -1957,13 +1957,21 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         // table and closed source file descriptions in the blocking I/O manager.
         // When debug assertions are enabled, run the GC as often as possible so that any cases
         // where it mistakenly removes an important tag become visible.
+        //
+        // Tree Borrows counts visited nodes rather than basic blocks, but only if a
+        // visit interval is configured; with `tree_gc_visit_interval == 0` it falls back to
+        // the plain basic-block interval.
         let gc_cond = if let Some(borrow_tracker) = &ecx.machine.borrow_tracker {
+            let default_cond =
+                ecx.machine.gc_interval > 0 && ecx.machine.since_gc >= ecx.machine.gc_interval;
             match borrow_tracker.borrow().borrow_tracker_method() {
                 crate::borrow_tracker::BorrowTrackerMethod::TreeBorrows(_) =>
-                    ecx.machine.tree_gc_visit_interval > 0
-                        && ecx.machine.visits_since_gc.get() >= ecx.machine.tree_gc_visit_interval,
-                crate::borrow_tracker::BorrowTrackerMethod::StackedBorrows =>
-                    ecx.machine.gc_interval > 0 && ecx.machine.since_gc >= ecx.machine.gc_interval,
+                    if ecx.machine.tree_gc_visit_interval > 0 {
+                        ecx.machine.visits_since_gc.get() >= ecx.machine.tree_gc_visit_interval
+                    } else {
+                        default_cond
+                    },
+                crate::borrow_tracker::BorrowTrackerMethod::StackedBorrows => default_cond,
             }
         } else {
             false

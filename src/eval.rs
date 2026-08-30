@@ -148,9 +148,11 @@ pub struct MiriConfig {
     pub native_lib: Vec<PathBuf>,
     /// Whether to enable the new native lib tracing system.
     pub native_lib_enable_tracing: bool,
-    /// Run a garbage collector for BorTags every N basic blocks.
+    /// Run a garbage collector for BorTags every N basic blocks. Under TreeBorrows this is
+    /// only used when `tree_gc_visit_interval` is `0`.
     pub gc_interval: u32,
-    /// Run a garbage collector for TreeBorrows every N visited nodes.
+    /// Run a garbage collector for TreeBorrows every N visited nodes. `0` falls back to the
+    /// basic-block-based `gc_interval`.
     pub tree_gc_visit_interval: u32,
     /// Lower bound for the adaptive TreeBorrows GC interval (in visited nodes).
     pub tree_gc_min_interval: u32,
