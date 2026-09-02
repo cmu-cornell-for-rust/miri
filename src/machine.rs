@@ -627,15 +627,11 @@ pub struct MiriMachine<'tcx> {
 
     /// Run a garbage collector for TreeBorrows every N visited nodes.
     /// Recalculated after every GC pass based on the fraction of dead nodes found,
-    /// clamped to `[tree_gc_min_interval, tree_gc_max_interval]`; the configured
+    /// clamped to a fixed range; the configured
     /// value only sets the starting point (0 disables the visit-based GC entirely).
     pub(crate) tree_gc_visit_interval: u32,
     /// Number of nodes visited since the last GC pass.
     pub(crate) visits_since_gc: Cell<u32>,
-    /// Lower bound for the adaptive `tree_gc_visit_interval`.
-    pub(crate) tree_gc_min_interval: u32,
-    /// Upper bound for the adaptive `tree_gc_visit_interval`.
-    pub(crate) tree_gc_max_interval: u32,
     /// The dead-node fraction a GC pass should find for `tree_gc_visit_interval` to be
     /// considered well-tuned; the interval adapts toward this target. `0` disables the
     /// adaptation, pinning `tree_gc_visit_interval` to its configured value.
@@ -848,8 +844,6 @@ impl<'tcx> MiriMachine<'tcx> {
             since_gc: 0,
             tree_gc_visit_interval: config.tree_gc_visit_interval,
             visits_since_gc: Cell::new(0),
-            tree_gc_min_interval: config.tree_gc_min_interval,
-            tree_gc_max_interval: config.tree_gc_max_interval,
             tree_gc_target_dead_ratio: config.tree_gc_target_dead_ratio,
             tree_gc_min_nodes: config.tree_gc_min_nodes,
             tree_gc_max_compact: config.tree_gc_max_compact,
@@ -1085,8 +1079,6 @@ impl VisitProvenance for MiriMachine<'_> {
             since_gc: _,
             tree_gc_visit_interval: _,
             visits_since_gc: _,
-            tree_gc_min_interval: _,
-            tree_gc_max_interval: _,
             tree_gc_target_dead_ratio: _,
             tree_gc_min_nodes: _,
             tree_gc_max_compact: _,

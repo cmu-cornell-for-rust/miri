@@ -627,16 +627,6 @@ fn main() -> ExitCode {
                 fatal_error!("-Zmiri-tree-gc-visits requires a `u32`: {}", err)
             });
             miri_config.tree_gc_visit_interval = interval;
-        } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-min-interval=") {
-            let interval = param.parse::<u32>().unwrap_or_else(|err| {
-                fatal_error!("-Zmiri-tree-gc-min-interval requires a `u32`: {}", err)
-            });
-            miri_config.tree_gc_min_interval = interval;
-        } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-max-interval=") {
-            let interval = param.parse::<u32>().unwrap_or_else(|err| {
-                fatal_error!("-Zmiri-tree-gc-max-interval requires a `u32`: {}", err)
-            });
-            miri_config.tree_gc_max_interval = interval;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-tree-gc-target-dead-ratio=") {
             let ratio = param.parse::<f64>().unwrap_or_else(|err| {
                 fatal_error!("-Zmiri-tree-gc-target-dead-ratio requires an `f64`: {}", err)
@@ -736,13 +726,6 @@ fn main() -> ExitCode {
             "Weak memory emulation cannot be enabled when the data race detector is disabled"
         );
     };
-    // The adaptive Tree Borrows GC interval bounds must be a valid range.
-    if miri_config.tree_gc_min_interval > miri_config.tree_gc_max_interval {
-        fatal_error!(
-            "`-Zmiri-tree-gc-min-interval` must not be larger than `-Zmiri-tree-gc-max-interval`"
-        );
-    }
-
     // Validate GenMC settings.
     if miri_config.genmc_config.is_some()
         && let Err(err) = GenmcConfig::validate(&mut miri_config)

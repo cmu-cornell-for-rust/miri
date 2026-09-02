@@ -277,11 +277,16 @@ fn remove_unreachable_allocs<'tcx>(ecx: &mut MiriInterpCx<'tcx>, allocs: FxHashS
     ecx.remove_unreachable_allocs(&allocs.collected);
 }
 
+/// Lower bound for the adaptive `tree_gc_visit_interval`.
+const TREE_GC_MIN_INTERVAL: u32 = 1_000;
+/// Upper bound for the adaptive `tree_gc_visit_interval`.
+const TREE_GC_MAX_INTERVAL: u32 = 100_000;
+
 /// Recalculates `tree_gc_visit_interval` based on how productive this GC pass was:
 /// passes finding a larger dead-node fraction than `tree_gc_target_dead_ratio`
 /// shrink the interval (collect sooner); passes finding less grow it.
 /// The adjustment is damped to at most 2x per pass in either direction, and the
-/// resulting interval is clamped to `[tree_gc_min_interval, tree_gc_max_interval]`.
+/// resulting interval is clamped to `[TREE_GC_MIN_INTERVAL, TREE_GC_MAX_INTERVAL]`.
 ///
 /// A `tree_gc_target_dead_ratio` of `0` disables the adaptation, pinning the interval
 /// to its configured value.
@@ -301,7 +306,7 @@ fn update_tree_gc_interval<'tcx>(ecx: &mut MiriInterpCx<'tcx>, live: usize, dead
     #[allow(clippy::as_conversions)]
     let new_interval = (f64::from(ecx.machine.tree_gc_visit_interval) * adjust) as u32;
     ecx.machine.tree_gc_visit_interval =
-        new_interval.clamp(ecx.machine.tree_gc_min_interval, ecx.machine.tree_gc_max_interval);
+        new_interval.clamp(TREE_GC_MIN_INTERVAL, TREE_GC_MAX_INTERVAL);
 }
 
 impl<'tcx> EvalContextExt<'tcx> for crate::MiriInterpCx<'tcx> {}
