@@ -508,11 +508,7 @@ impl AllocState {
                 (0, 0)
             }
             AllocState::TreeBorrows(tb) =>
-                tb.borrow_mut().remove_unreachable_tags(
-                    tags,
-                    tree_gc_min_nodes,
-                    max_compact,
-                ),
+                tb.borrow_mut().remove_unreachable_tags(tags, tree_gc_min_nodes, max_compact),
         }
     }
 

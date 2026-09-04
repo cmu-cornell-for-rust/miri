@@ -384,6 +384,9 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let alloc_extra = this.get_alloc_extra(alloc_id)?;
         let mut tree_borrows = alloc_extra.borrow_tracker_tb().borrow_mut();
 
+        #[cfg(feature = "lazy-alloc")]
+        tree_borrows.ensure_init(this.machine.borrow_tracker.as_ref().unwrap(), &this.machine);
+
         for (perm_range, loc_state) in inside_perms.iter_all() {
             if let Some(access) = loc_state.permission().associated_access() {
                 // Some reborrows incur a read/write access to the parent.
@@ -438,13 +441,6 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 }
             }
         }
-
-        // Initialize the tree if it hasn't been initialized yet.
-        #[cfg(feature = "lazy-alloc")]
-        tree_borrows.ensure_init(
-            &mut this.machine.borrow_tracker.as_ref().unwrap().borrow_mut(),
-            &this.machine,
-        );
 
         // Record the parent-child pair in the tree.
         tree_borrows.new_child(

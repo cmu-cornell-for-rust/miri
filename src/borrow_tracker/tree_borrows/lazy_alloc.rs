@@ -32,22 +32,31 @@ pub enum LazyTree {
         span: Span,
         exposed: bool,
     },
-    Init(Tree),
+    Init(Box<Tree>),
 }
 
 impl LazyTree {
-    /// Materialize the tree if it does not exist yet.
-    ///
-    /// Called during `new_child`. It is a no-op once the tree exists.
-    pub fn ensure_init(&mut self, state: &mut GlobalStateInner, machine: &MiriMachine<'_>) {
-        if let LazyTree::Uninit { id, size, span, exposed } = self {
-            let tag = state.root_ptr_tag(*id, machine);
-            let mut tree = Tree::new(tag, *size, *span);
-            if *exposed {
-                tree.expose_tag(tag, false);
-            }
-            *self = LazyTree::Init(tree);
+    /// Create the tree if it does not exist yet. The common case of an already-initialized tree
+    /// must be cheap, so only the check is here.
+    #[inline]
+    pub fn ensure_init(&mut self, global: &GlobalState, machine: &MiriMachine<'_>) {
+        if matches!(self, LazyTree::Uninit { .. }) {
+            self.init(global, machine);
         }
+    }
+
+    /// The cold half of [`LazyTree::ensure_init`], kept out of line so that it does not bloat
+    /// the retag path. The global state is only borrowed when there is actually a tree to build.
+    #[cold]
+    #[inline(never)]
+    fn init(&mut self, global: &GlobalState, machine: &MiriMachine<'_>) {
+        let LazyTree::Uninit { id, size, span, exposed } = *self else { return };
+        let tag = global.borrow_mut().root_ptr_tag(id, machine);
+        let mut tree = Tree::new(tag, size, span);
+        if exposed {
+            tree.expose_tag(tag, false);
+        }
+        *self = LazyTree::Init(Box::new(tree));
     }
 
     /// The tree, if it has been materialized.
@@ -180,8 +189,7 @@ impl<'tcx> LazyTree {
         max_compact: usize,
     ) -> (usize, usize) {
         match self.get_mut() {
-            Some(tree) =>
-                tree.remove_unreachable_tags(live_tags, min_nodes, max_compact),
+            Some(tree) => tree.remove_unreachable_tags(live_tags, min_nodes, max_compact),
             None => (0, 0),
         }
     }
