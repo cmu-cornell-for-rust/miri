@@ -218,7 +218,7 @@ impl Default for MiriConfig {
             tree_gc_visit_interval: 20_000,
             tree_gc_target_dead_ratio: 0.25,
             tree_gc_min_nodes: 64,
-            tree_gc_max_compact: 8,
+            tree_gc_max_compact: 16,
             num_cpus: 1,
             page_size: None,
             collect_leak_backtraces: true,
