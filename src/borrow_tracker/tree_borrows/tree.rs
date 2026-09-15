@@ -10,6 +10,7 @@
 //!   and the relative position of the access;
 //! - idempotency properties asserted in `perms.rs` (for optimizations)
 
+use std::cell::Cell;
 use std::ops::Range;
 use std::{cmp, fmt, mem};
 
@@ -526,6 +527,7 @@ impl<'tcx> Tree {
         global: &GlobalState,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
+        visits_since_gc: &Cell<u32>,
     ) -> InterpResult<'tcx> {
         self.perform_access(
             prov,
@@ -535,6 +537,7 @@ impl<'tcx> Tree {
             global,
             alloc_id,
             span,
+            visits_since_gc,
         )?;
 
         let start_idx = match prov {
@@ -629,6 +632,7 @@ impl<'tcx> Tree {
         global: &GlobalState,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
+        visits_since_gc: &Cell<u32>,
     ) -> InterpResult<'tcx> {
         #[cfg(feature = "expensive-consistency-checks")]
         if self.roots.len() > 1 || matches!(prov, ProvenanceExtra::Wildcard) {
@@ -657,6 +661,7 @@ impl<'tcx> Tree {
                 ChildrenVisitMode::VisitChildrenOfAccessed,
                 &diagnostics,
                 /* min_exposed_child */ None, // only matters for protector end access,
+                visits_since_gc,
             )?;
         }
         interp_ok(())
@@ -674,6 +679,7 @@ impl<'tcx> Tree {
         global: &GlobalState,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
+        visits_since_gc: &Cell<u32>,
     ) -> InterpResult<'tcx> {
         #[cfg(feature = "expensive-consistency-checks")]
         if self.roots.len() > 1 {
@@ -720,6 +726,7 @@ impl<'tcx> Tree {
                     ChildrenVisitMode::SkipChildrenOfAccessed,
                     &diagnostics,
                     min_exposed_child,
+                    visits_since_gc,
                 )?;
             }
         }
@@ -729,15 +736,37 @@ impl<'tcx> Tree {
 
 /// Integration with the BorTag garbage collector
 impl Tree {
-    pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
-        for i in 0..(self.roots.len()) {
-            self.remove_useless_children(self.roots[i], live_tags);
+    /// Returns `(live, dead)`: the number of nodes remaining in the tree and the
+    /// number of nodes removed by this pass.
+    pub fn remove_unreachable_tags(
+        &mut self,
+        live_tags: &FxHashSet<BorTag>,
+        min_nodes: usize,
+        max_compact: usize,
+    ) -> (usize, usize) {
+        let before = self.tag_mapping.len();
+        // Only bother garbage collecting trees that are large enough
+        if before <= min_nodes {
+            return (before, 0);
+        }
+        // A bound of `0` or `1` disables multi-child compaction, so take the cheaper traversal
+        // that only drops dead leaves and splices single children.
+        if max_compact <= 1 {
+            for i in 0..(self.roots.len()) {
+                self.remove_useless_single_children(self.roots[i], live_tags);
+            }
+        } else {
+            for i in 0..(self.roots.len()) {
+                self.remove_useless_children(self.roots[i], live_tags, max_compact);
+            }
         }
         // Right after the GC runs is a good moment to check if we can
         // merge some adjacent ranges that were made equal by the removal of some
         // tags (this does not necessarily mean that they have identical internal representations,
         // see the `PartialEq` impl for `UniValMap`)
         self.locations.merge_adjacent_thorough();
+        let after = self.tag_mapping.len();
+        (after, before - after)
     }
 
     /// Checks if a node is useless and should be GC'ed.
@@ -788,6 +817,48 @@ impl Tree {
         Some(child_idx)
     }
 
+    /// Checks whether a node can be spliced out of the tree, reparenting all of its
+    /// children directly onto its own parent. This is sound exactly when, on every
+    /// location, `can_be_replaced_by_child` holds between the node's permission and
+    /// the permission of *each* of its children.
+    fn can_be_replaced_by_children(
+        &self,
+        idx: UniIndex,
+        live: &FxHashSet<BorTag>,
+        parent_width: usize,
+        max_compact: usize,
+    ) -> bool {
+        let node = self.nodes.get(idx).unwrap();
+
+        // Ordered cheapest-first: a pointer check, then arithmetic, and only then the
+        // hash lookup into `live`, so common rejections never pay for the hash.
+
+        // Additionally check that the resulting parent fits within the `max_compact` limit.
+        if node.parent.is_none()
+            || live.contains(&node.tag)
+            || parent_width + node.children.len() - 1 > max_compact
+        {
+            return false;
+        }
+
+        // With several children, each sees the others' accesses as foreign, so the stricter
+        // `can_be_replaced_by_children` applies.
+        let children: SmallVec<[(UniIndex, Permission); 4]> = node
+            .children
+            .iter()
+            .map(|&child_idx| (child_idx, self.nodes.get(child_idx).unwrap().default_initial_perm))
+            .collect();
+        self.locations.iter_all().all(|(_range, loc)| {
+            let parent_perm =
+                loc.perms.get(idx).map(|x| x.permission).unwrap_or(node.default_initial_perm);
+            children.iter().all(|&(child_idx, child_default)| {
+                let child_perm =
+                    loc.perms.get(child_idx).map(|x| x.permission).unwrap_or(child_default);
+                parent_perm.can_be_replaced_by_children(child_perm)
+            })
+        })
+    }
+
     /// Properly removes a node.
     /// The node to be removed should not otherwise be usable. It also
     /// should have no children, but this is not checked, so that nodes
@@ -820,7 +891,7 @@ impl Tree {
     /// `child: Reserved`. This tree can exist. If we blindly delete `parent` and reassign
     /// `child` to be a direct child of `root` then Writes to `child` are now permitted
     /// whereas they were not when `parent` was still there.
-    fn remove_useless_children(&mut self, root: UniIndex, live: &FxHashSet<BorTag>) {
+    fn remove_useless_single_children(&mut self, root: UniIndex, live: &FxHashSet<BorTag>) {
         // To avoid stack overflows, we roll our own stack.
         // Each element in the stack consists of the current tag, and the number of the
         // next child to be processed.
@@ -877,6 +948,80 @@ impl Tree {
             }
         }
     }
+
+    /// Alternative to `remove_useless_single_children` that also splices out nodes with multiple children,
+    /// as long as the resulting parent does not exceed `max_compact` children.
+    fn remove_useless_children(
+        &mut self,
+        root: UniIndex,
+        live: &FxHashSet<BorTag>,
+        max_compact: usize,
+    ) {
+        let mut stack = vec![(root, 0)];
+        while let Some((tag, nth_child)) = stack.last_mut() {
+            let node = self.nodes.get(*tag).unwrap();
+            if *nth_child < node.children.len() {
+                let next_child = node.children[*nth_child];
+                *nth_child += 1;
+                stack.push((next_child, 0));
+                continue;
+            } else {
+                let old_children = mem::take(&mut self.nodes.get_mut(*tag).unwrap().children);
+                let mut new_children = SmallVec::<[UniIndex; 4]>::with_capacity(old_children.len());
+                for (i, idx) in old_children.iter().copied().enumerate() {
+                    // Read the node once; the arms below need `&mut self`.
+                    let (num_children, tag_of_idx) = {
+                        let node = self.nodes.get(idx).unwrap();
+                        (node.children.len(), node.tag)
+                    };
+                    match num_children {
+                        // Node is a leaf.
+                        0 =>
+                            if live.contains(&tag_of_idx) {
+                                new_children.push(idx);
+                            } else {
+                                self.remove_useless_node(idx);
+                            },
+                        // Exactly one child.
+                        // Since no siblings are gained, the weaker check suffices.
+                        1 =>
+                            match self.can_be_replaced_by_single_child(idx, live) {
+                                Some(child) => {
+                                    self.nodes.get_mut(child).unwrap().parent = Some(*tag);
+                                    self.remove_useless_node(idx);
+                                    new_children.push(child);
+                                }
+                                None => new_children.push(idx),
+                            },
+                        // Node has more than one child. If every child can soundly replace it, compact it
+                        // by reparenting all of its children onto its parent.
+                        _ if self.can_be_replaced_by_children(
+                            idx,
+                            live,
+                            new_children.len() + (old_children.len() - i),
+                            max_compact,
+                        ) =>
+                        {
+                            let grandchildren =
+                                mem::take(&mut self.nodes.get_mut(idx).unwrap().children);
+                            for &grandchild in &grandchildren {
+                                self.nodes.get_mut(grandchild).unwrap().parent = Some(*tag);
+                            }
+                            self.remove_useless_node(idx);
+                            new_children.extend(grandchildren);
+                        }
+                        _ => new_children.push(idx),
+                    }
+                }
+                // Put back the now-rebuilt vector.
+                self.nodes.get_mut(*tag).unwrap().children = new_children;
+
+                // We are done, the parent can continue.
+                stack.pop();
+                continue;
+            }
+        }
+    }
 }
 
 impl<'tcx> LocationTree {
@@ -920,6 +1065,7 @@ impl<'tcx> LocationTree {
         visit_children: ChildrenVisitMode,
         diagnostics: &DiagnosticInfo,
         min_exposed_child: Option<BorTag>,
+        visits_since_gc: &Cell<u32>,
     ) -> InterpResult<'tcx> {
         let accessed_root = if let Some(idx) = access_source {
             Some(self.perform_normal_access(
@@ -929,6 +1075,7 @@ impl<'tcx> LocationTree {
                 global,
                 visit_children,
                 diagnostics,
+                visits_since_gc,
             )?)
         } else {
             // `SkipChildrenOfAccessed` only gets set on protector release, which only
@@ -977,6 +1124,7 @@ impl<'tcx> LocationTree {
                 global,
                 diagnostics,
                 /*is_wildcard_tree*/ i != 0,
+                visits_since_gc,
             )?;
         }
         interp_ok(())
@@ -996,6 +1144,7 @@ impl<'tcx> LocationTree {
         global: &GlobalState,
         visit_children: ChildrenVisitMode,
         diagnostics: &DiagnosticInfo,
+        visits_since_gc: &Cell<u32>,
     ) -> InterpResult<'tcx, UniIndex> {
         // Performs the per-node work:
         // - insert the permission if it does not exist
@@ -1014,7 +1163,9 @@ impl<'tcx> LocationTree {
             let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
             old_state.skip_if_known_noop(access_kind, args.rel_pos)
         };
+        let mut visit_count: u32 = 0;
         let node_app = |args: NodeAppArgs<'_, LocationTree>| {
+            visit_count += 1;
             let node = args.nodes.get_mut(args.idx).unwrap();
             let mut perm = args.data.perms.entry(args.idx);
 
@@ -1045,13 +1196,14 @@ impl<'tcx> LocationTree {
         };
 
         let visitor = TreeVisitor { nodes, data: self };
-        match visit_children {
+        let result = match visit_children {
             ChildrenVisitMode::VisitChildrenOfAccessed =>
                 visitor.traverse_this_parents_children_other(access_source, node_skipper, node_app),
             ChildrenVisitMode::SkipChildrenOfAccessed =>
                 visitor.traverse_nonchildren(access_source, node_skipper, node_app),
-        }
-        .into()
+        };
+        visits_since_gc.set(visits_since_gc.get().saturating_add(visit_count));
+        result.into()
     }
 
     /// Performs a wildcard access on the tree with root `root`. Takes the `access_relatedness`
@@ -1071,6 +1223,7 @@ impl<'tcx> LocationTree {
         global: &GlobalState,
         diagnostics: &DiagnosticInfo,
         is_wildcard_tree: bool,
+        visits_since_gc: &Cell<u32>,
     ) -> InterpResult<'tcx> {
         let get_relatedness = |idx: UniIndex, node: &Node, loc: &LocationTree| {
             // If the tag is larger than `max_local_tag` then the access can only be foreign.
@@ -1086,6 +1239,7 @@ impl<'tcx> LocationTree {
 
         // Whether there is an exposed node in this tree that allows this access.
         let mut has_valid_exposed = false;
+        let mut visit_count: u32 = 0;
 
         // This does a traversal across the tree updating children before their parents. The
         // difference to `perform_normal_access` is that we take the access relatedness from
@@ -1122,6 +1276,7 @@ impl<'tcx> LocationTree {
                 }
             },
             |args| {
+                visit_count += 1;
                 let node = args.nodes.get_mut(args.idx).unwrap();
 
                 let protected = global.borrow().protected_tags.contains_key(&node.tag);
@@ -1177,6 +1332,7 @@ impl<'tcx> LocationTree {
                 })
             },
         )?;
+        visits_since_gc.set(visits_since_gc.get().saturating_add(visit_count));
         // If there is no exposed node in this tree that allows this access, then the access *must*
         // be foreign to the entire subtree. Foreign accesses are only possible on wildcard subtrees
         // as there are no ancestors to the main root. So if we do not find a valid exposed node in

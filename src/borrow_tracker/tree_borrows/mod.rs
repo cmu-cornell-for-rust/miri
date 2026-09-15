@@ -18,12 +18,23 @@ mod tree_visitor;
 mod unimap;
 mod wildcard;
 
-#[cfg(test)]
-mod exhaustive;
-
+#[cfg(feature = "lazy-alloc")]
+mod lazy_alloc;
 use self::perms::Permission;
 pub use self::tree::Tree;
 
+#[cfg(test)]
+mod exhaustive;
+
+/// Per-allocation state for Tree Borrows.
+///
+/// With the `lazy-alloc` feature the tree is only built once it is actually
+/// needed; otherwise it is created eagerly together with the allocation. Both
+/// types expose the same methods, so callers never need to care which one this
+/// is.
+#[cfg(feature = "lazy-alloc")]
+pub type AllocState = lazy_alloc::LazyTree;
+#[cfg(not(feature = "lazy-alloc"))]
 pub type AllocState = Tree;
 
 impl<'tcx> Tree {
@@ -67,6 +78,7 @@ impl<'tcx> Tree {
             global,
             alloc_id,
             span,
+            &machine.visits_since_gc,
         )
     }
 
@@ -80,7 +92,14 @@ impl<'tcx> Tree {
     ) -> InterpResult<'tcx> {
         let global = machine.borrow_tracker.as_ref().unwrap();
         let span = machine.current_user_relevant_span();
-        self.dealloc(prov, alloc_range(Size::ZERO, size), global, alloc_id, span)
+        self.dealloc(
+            prov,
+            alloc_range(Size::ZERO, size),
+            global,
+            alloc_id,
+            span,
+            &machine.visits_since_gc,
+        )
     }
 
     /// A tag just lost its protector.
@@ -97,7 +116,7 @@ impl<'tcx> Tree {
         alloc_id: AllocId, // diagnostics
     ) -> InterpResult<'tcx> {
         let span = machine.current_user_relevant_span();
-        self.perform_protector_end_access(tag, global, alloc_id, span)?;
+        self.perform_protector_end_access(tag, global, alloc_id, span, &machine.visits_since_gc)?;
 
         self.update_exposure_for_protector_release(tag);
 
@@ -365,6 +384,9 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let alloc_extra = this.get_alloc_extra(alloc_id)?;
         let mut tree_borrows = alloc_extra.borrow_tracker_tb().borrow_mut();
 
+        #[cfg(feature = "lazy-alloc")]
+        tree_borrows.ensure_init();
+
         for (perm_range, loc_state) in inside_perms.iter_all() {
             if let Some(access) = loc_state.permission().associated_access() {
                 // Some reborrows incur a read/write access to the parent.
@@ -391,6 +413,7 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     this.machine.borrow_tracker.as_ref().unwrap(),
                     alloc_id,
                     this.machine.current_user_relevant_span(),
+                    &this.machine.visits_since_gc,
                 )?;
 
                 // Also inform the data race model (but only if any bytes are actually affected).
