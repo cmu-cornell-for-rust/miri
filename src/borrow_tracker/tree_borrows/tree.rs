@@ -528,6 +528,7 @@ impl<'tcx> Tree {
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         visits_since_gc: &Cell<u32>,
+        tree_gc_min_nodes: usize,
     ) -> InterpResult<'tcx> {
         self.perform_access(
             prov,
@@ -538,6 +539,7 @@ impl<'tcx> Tree {
             alloc_id,
             span,
             visits_since_gc,
+            tree_gc_min_nodes,
         )?;
 
         let start_idx = match prov {
@@ -633,6 +635,7 @@ impl<'tcx> Tree {
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         visits_since_gc: &Cell<u32>,
+        tree_gc_min_nodes: usize,
     ) -> InterpResult<'tcx> {
         #[cfg(feature = "expensive-consistency-checks")]
         if self.roots.len() > 1 || matches!(prov, ProvenanceExtra::Wildcard) {
@@ -665,9 +668,9 @@ impl<'tcx> Tree {
                 &mut visits,
             )?;
         }
-        // Trees with a single node have nothing for the GC to prune, so accesses to
+        // The GC skips trees with at most `tree_gc_min_nodes` nodes, so accesses to
         // them should not count towards triggering a GC pass.
-        if self.tag_mapping.len() > 1 {
+        if self.tag_mapping.len() > tree_gc_min_nodes {
             visits_since_gc.set(visits_since_gc.get().saturating_add(visits));
         }
         interp_ok(())
@@ -686,6 +689,7 @@ impl<'tcx> Tree {
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
         visits_since_gc: &Cell<u32>,
+        tree_gc_min_nodes: usize,
     ) -> InterpResult<'tcx> {
         #[cfg(feature = "expensive-consistency-checks")]
         if self.roots.len() > 1 {
@@ -737,9 +741,9 @@ impl<'tcx> Tree {
                 )?;
             }
         }
-        // Trees with a single node have nothing for the GC to prune, so accesses to
+        // The GC skips trees with at most `tree_gc_min_nodes` nodes, so accesses to
         // them should not count towards triggering a GC pass.
-        if self.tag_mapping.len() > 1 {
+        if self.tag_mapping.len() > tree_gc_min_nodes {
             visits_since_gc.set(visits_since_gc.get().saturating_add(visits));
         }
         interp_ok(())
